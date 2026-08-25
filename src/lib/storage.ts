@@ -12,7 +12,7 @@
 
 import { uid } from './id'
 import type { Mindmap, MindmapSummary } from '../types/mindmap'
-import { summarise } from '../types/mindmap'
+import { migrateEdge, summarise } from '../types/mindmap'
 import type { SignatureOptions } from './signature'
 import type { CompositionSpec } from './composition'
 
@@ -63,7 +63,13 @@ function isUsableMindmap(value: unknown): value is Mindmap {
 function readAll(): Stored {
   const raw = readJson<Record<string, unknown>>(MINDMAPS_KEY, {})
   const clean: Stored = {}
-  for (const [id, value] of Object.entries(raw)) if (isUsableMindmap(value)) clean[id] = value
+  for (const [id, value] of Object.entries(raw)) {
+    if (!isUsableMindmap(value)) continue
+    // Mindmaps saved before edge weight existed carry `dashed` instead. Migrating on read rather
+    // than with a one-off upgrade pass means there is no version counter to maintain, and a
+    // half-migrated store cannot happen.
+    clean[id] = { ...value, edges: value.edges.map(migrateEdge) }
+  }
   return clean
 }
 

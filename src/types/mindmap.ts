@@ -49,13 +49,53 @@ export interface MindmapNode {
   tag?: string | null
 }
 
+/**
+ * How much a connection carries, expressed as line weight.
+ *
+ *  - `heavy`    thick solid line. The main path.
+ *  - `standard` normal solid line. The default.
+ *  - `semi`     thinner dashed line. A partial or intermittent path.
+ */
+export type EdgeWeight = 'heavy' | 'standard' | 'semi'
+
+/** Which ends of a connection get an arrowhead. */
+export type EdgeArrow = 'none' | 'start' | 'end' | 'both'
+
+export const EDGE_WEIGHTS: readonly EdgeWeight[] = ['heavy', 'standard', 'semi']
+export const EDGE_ARROWS: readonly EdgeArrow[] = ['none', 'end', 'start', 'both']
+
+export const DEFAULT_EDGE_WEIGHT: EdgeWeight = 'standard'
+// `none` rather than `end` so adding this feature did not silently put arrowheads on every
+// existing mindmap. The reference diagram this app's look is drawn from has no arrowheads either —
+// it conveys direction with travelling packets — so arrows are opt-in per edge.
+export const DEFAULT_EDGE_ARROW: EdgeArrow = 'none'
+
 export interface MindmapEdge {
   id: string
   source_node_key: string
   target_node_key: string
   label?: string | null
-  /** Dashed, packet-less connector. Mirrors `.wire-base.dashed` in the reference. */
-  dashed?: boolean
+  /** Line weight. Absent means `standard`. */
+  weight?: EdgeWeight
+  /** Arrowhead placement. Absent means `none`. */
+  arrow?: EdgeArrow
+}
+
+export const edgeWeightOf = (edge: MindmapEdge): EdgeWeight => edge.weight ?? DEFAULT_EDGE_WEIGHT
+export const edgeArrowOf = (edge: MindmapEdge): EdgeArrow => edge.arrow ?? DEFAULT_EDGE_ARROW
+
+/** Labels for the editor controls, kept next to the type so the two cannot drift apart. */
+export const EDGE_WEIGHT_LABELS: Record<EdgeWeight, string> = {
+  heavy: 'Heavy',
+  standard: 'Standard',
+  semi: 'Semi',
+}
+
+export const EDGE_ARROW_LABELS: Record<EdgeArrow, string> = {
+  none: 'None',
+  end: 'To end',
+  start: 'To start',
+  both: 'Both',
 }
 
 export interface Mindmap {
@@ -74,6 +114,24 @@ export interface MindmapSummary {
   description: string | null
   node_count: number
   updated_at: string
+}
+
+/**
+ * Brings an edge from any older shape up to date.
+ *
+ * `dashed: boolean` was the original field, and it meant two things at once: draw a dashed line,
+ * and treat the connection as not-yet-real (no travelling packet). Those are now separate — weight
+ * is purely visual, and "nothing flows here" comes from an endpoint node's `reserved` flag. So a
+ * legacy `dashed: true` becomes `weight: 'semi'`, and the packet suppression it used to imply is
+ * already carried by the reserved node it pointed at.
+ *
+ * Applied on both import and storage read, because mindmaps saved before this change are sitting
+ * in localStorage and must not silently lose their dashed styling.
+ */
+export function migrateEdge(edge: MindmapEdge & { dashed?: unknown }): MindmapEdge {
+  const { dashed, ...rest } = edge
+  if (rest.weight) return rest
+  return { ...rest, weight: dashed === true ? 'semi' : DEFAULT_EDGE_WEIGHT }
 }
 
 export const summarise = (m: Mindmap): MindmapSummary => ({

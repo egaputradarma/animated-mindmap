@@ -7,9 +7,11 @@
 // design, which is what makes them testable without a canvas.
 
 import { describe, expect, it } from 'vitest'
-import { arcBetween, measure, pointAtFraction } from './bezier'
+import { arcBetween, measure, pointAtFraction, tangentAtFraction } from './bezier'
 import { buildGraph, edgeRevealOrder, revealOrder } from './graph'
+import { exportAuthoringJson, importMindmap } from './importMindmap'
 import { layoutMindmap, type LayoutOptions } from './layout'
+import { edgeArrowOf, edgeWeightOf, migrateEdge } from '../types/mindmap'
 import { opaqueBoundsFromAlpha, signatureRect, type SignatureCorner, type SignatureOptions } from './signature'
 import { estimator, wrapText } from './text'
 import { edgeState, frameState, nodeState, packetCyclesFor, seedFromString, type TimelineOptions } from './timeline'
@@ -18,7 +20,8 @@ import type { Mindmap } from '../types/mindmap'
 
 // ── Fixtures ──
 
-/** Lopsided on purpose: one bushy branch, one thin, a grandchild, a dashed edge and a hub flag. */
+/** Lopsided on purpose: one bushy branch, one thin, a grandchild, a reserved node, and one edge
+ *  exercising semi weight plus double arrowheads. */
 function fixture(): Mindmap {
   return {
     id: 'm1',
@@ -37,7 +40,7 @@ function fixture(): Mindmap {
       { id: 'e1', source_node_key: 'hub', target_node_key: 'a' },
       { id: 'e2', source_node_key: 'hub', target_node_key: 'b' },
       { id: 'e3', source_node_key: 'hub', target_node_key: 'c' },
-      { id: 'e4', source_node_key: 'hub', target_node_key: 'd', dashed: true },
+      { id: 'e4', source_node_key: 'hub', target_node_key: 'd', weight: 'semi', arrow: 'both' },
       { id: 'e5', source_node_key: 'a', target_node_key: 'a1' },
       { id: 'e6', source_node_key: 'a', target_node_key: 'a2' },
     ],
@@ -253,6 +256,127 @@ describe('layout', () => {
     expect(left.x).toBeLessThan(hub.x)
   })
 })
+
+// ── Connection weight, arrows and trims ──
+
+describe('connections', () => {
+  it('defaults to standard weight and no arrowheads', () => {
+    const edge = { id: 'x', source_node_key: 'a', target_node_key: 'b' }
+    expect(edgeWeightOf(edge)).toBe('standard')
+    // Arrows are opt-in: turning them on by default would have restyled every existing mindmap.
+    expect(edgeArrowOf(edge)).toBe('none')
+  })
+
+  it('migrates a legacy dashed edge to semi weight', () => {
+    expect(migrateEdge({ id: 'x', source_node_key: 'a', target_node_key: 'b', dashed: true }).weight).toBe('semi')
+    expect(migrateEdge({ id: 'x', source_node_key: 'a', target_node_key: 'b', dashed: false }).weight).toBe('standard')
+  })
+
+  it('leaves an explicit weight alone when a stale dashed flag is also present', () => {
+    const migrated = migrateEdge({
+      id: 'x',
+      source_node_key: 'a',
+      target_node_key: 'b',
+      weight: 'heavy',
+      dashed: true,
+    })
+    expect(migrated.weight).toBe('heavy')
+    // The obsolete field must not survive, or it would keep re-triggering migration logic.
+    expect('dashed' in migrated).toBe(false)
+  })
+
+  it('accepts weight and arrow through the importer, including legacy dashed', () => {
+    const { mindmap } = importMindmap(
+      JSON.stringify({
+        name: 'Weights',
+        nodes: [{ key: 'a', label: 'A', hero: true }, { key: 'b', label: 'B' }, { key: 'c', label: 'C' }],
+        edges: [
+          { from: 'a', to: 'b', weight: 'heavy', arrow: 'both' },
+          { from: 'a', to: 'c', dashed: true },
+        ],
+      }),
+    )
+
+    expect(mindmap.edges[0].weight).toBe('heavy')
+    expect(mindmap.edges[0].arrow).toBe('both')
+    expect(mindmap.edges[1].weight).toBe('semi')
+  })
+
+  it('ignores an unrecognised weight or arrow rather than storing it', () => {
+    const { mindmap } = importMindmap(
+      JSON.stringify({
+        name: 'Bad values',
+        nodes: [{ key: 'a', label: 'A' }, { key: 'b', label: 'B' }],
+        edges: [{ from: 'a', to: 'b', weight: 'ultra', arrow: 'sideways' }],
+      }),
+    )
+
+    expect(mindmap.edges[0].weight).toBe('standard')
+    expect(mindmap.edges[0].arrow).toBe('none')
+  })
+
+  it('round-trips weight and arrow through the authoring export', () => {
+    const { mindmap } = importMindmap(
+      JSON.stringify({
+        name: 'Round trip',
+        nodes: [{ key: 'a', label: 'A', hero: true }, { key: 'b', label: 'B' }],
+        edges: [{ from: 'a', to: 'b', weight: 'heavy', arrow: 'start' }],
+      }),
+    )
+
+    const reimported = importMindmap(exportAuthoringJson(mindmap)).mindmap
+    expect(reimported.edges[0].weight).toBe('heavy')
+    expect(reimported.edges[0].arrow).toBe('start')
+  })
+
+  it('carries weight and arrow through to the layout', () => {
+    const layout = layoutMindmap(fixture(), layoutOptions())
+    const semi = layout.edges.find(e => e.edge.id === 'e4')!
+
+    expect(semi.weight).toBe('semi')
+    expect(semi.arrow).toBe('both')
+    // Node 'd' is reserved, so nothing flows down this connection.
+    expect(semi.inert).toBe(true)
+    expect(layout.edges.find(e => e.edge.id === 'e1')!.inert).toBe(false)
+  })
+
+  it('trims every connection clear of both cards', () => {
+    const layout = layoutMindmap(fixture(), layoutOptions())
+
+    for (const edge of layout.edges) {
+      // Arrowheads and packets are placed between these, so an inverted or degenerate range would
+      // put them behind a card or off the line entirely.
+      expect(edge.startTrim).toBeGreaterThanOrEqual(0)
+      expect(edge.endTrim).toBeLessThanOrEqual(1)
+      expect(edge.startTrim).toBeLessThan(edge.endTrim)
+
+      const source = layout.nodes.find(n => n.key === edge.edge.source_node_key)!
+      const target = layout.nodes.find(n => n.key === edge.edge.target_node_key)!
+      const start = pointAtFraction(edge.geom, edge.startTrim)
+      const end = pointAtFraction(edge.geom, edge.endTrim)
+
+      // The whole point of trimming: both ends have to be in the visible gap, not buried under the
+      // card that is painted over the wire.
+      expect(insideCard(start, source)).toBe(false)
+      expect(insideCard(end, target)).toBe(false)
+    }
+  })
+
+  it('points the two arrowheads in opposite directions', () => {
+    const layout = layoutMindmap(fixture(), layoutOptions())
+    const edge = layout.edges.find(e => e.edge.id === 'e4')!
+
+    const atStart = tangentAtFraction(edge.geom, edge.startTrim)
+    const atEnd = tangentAtFraction(edge.geom, edge.endTrim)
+    // The start head is drawn against travel, so its effective direction is the negated tangent.
+    // Those two must not coincide, or both heads would point the same way.
+    const dot = -atStart.x * atEnd.x + -atStart.y * atEnd.y
+    expect(dot).toBeLessThan(0)
+  })
+})
+
+const insideCard = (p: { x: number; y: number }, node: { x: number; y: number; w: number; h: number }): boolean =>
+  p.x > node.x - node.w / 2 && p.x < node.x + node.w / 2 && p.y > node.y - node.h / 2 && p.y < node.y + node.h / 2
 
 // ── Signature containment ──
 //

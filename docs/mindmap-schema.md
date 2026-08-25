@@ -37,11 +37,35 @@ shadow the app's `/mindmaps` route — nginx would resolve that path to a direct
       "from": "node key or label",
       "to": "node key or label",
       "label": "string, optional — small chip drawn mid-wire",
-      "dashed": "boolean, optional — no packet, 'planned' connector"
+      "weight": "heavy | standard | semi, optional — defaults to standard",
+      "arrow": "none | end | start | both, optional — defaults to none"
     }
   ]
 }
 ```
+
+### Connection weight
+
+| value | line | packet |
+| --- | --- | --- |
+| `heavy` | thick solid | larger |
+| `standard` | normal solid | normal |
+| `semi` | thinner dashed | smaller |
+
+Weight is purely visual. Whether anything *flows* along a connection is decided by its endpoints:
+a connection touching a `reserved` node draws dim and carries no packet, because nothing travels to
+something that is not wired up yet. That means a dashed line can carry traffic and a solid one can
+be inert — the two ideas are independent.
+
+`dashed: true` is still accepted from older files and maps to `weight: "semi"`.
+
+### Arrowheads
+
+`none` (default), `end`, `start`, or `both`. Heads are placed where the line clears the card, which
+is measured per connection — a fixed inset would bury the head under a larger card.
+
+Default is `none` because the reference diagram this app's look comes from uses travelling packets
+rather than arrowheads to convey direction. Set them per connection where the direction matters.
 
 ## Rules that matter
 

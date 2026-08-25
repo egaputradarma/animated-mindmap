@@ -88,6 +88,56 @@ export function pointAtFraction(g: CurveGeometry, fraction: number): Point {
 }
 
 /**
+ * Unit direction of travel at `fraction` along the curve.
+ *
+ * Uses a central difference over arc-length points rather than the analytic derivative: the
+ * derivative is in Bézier-parameter space, so at a given *distance* along the curve it points the
+ * right way but would need renormalising against the arc-length mapping anyway. Sampling either
+ * side is simpler and already consistent with how everything else here is positioned.
+ */
+export function tangentAtFraction(g: CurveGeometry, fraction: number): Point {
+  const step = 0.02
+  const before = pointAtFraction(g, clamp01(fraction - step))
+  const after = pointAtFraction(g, clamp01(fraction + step))
+  const dx = after.x - before.x
+  const dy = after.y - before.y
+  const length = Math.hypot(dx, dy)
+  // Degenerate curve: any direction is as wrong as any other, so pick one deterministically.
+  return length === 0 ? { x: 1, y: 0 } : { x: dx / length, y: dy / length }
+}
+
+export interface Rect {
+  x: number
+  y: number
+  width: number
+  height: number
+}
+
+/**
+ * Fraction along the curve at which it clears `rect`, searching from `from` toward `to`.
+ *
+ * Wires are laid out centre-to-centre and cards are painted over them, so the first and last
+ * stretch of every curve is hidden. Anything that must stay visible — an arrowhead, a travelling
+ * packet — has to start beyond the card's edge. Sampling for the crossing adapts to each card's
+ * real size, which a fixed inset cannot: the same 7% that clears a small card leaves an arrowhead
+ * buried under a large one.
+ */
+export function fractionOutside(g: CurveGeometry, rect: Rect, from: number, to: number): number {
+  const STEPS = 48
+  for (let i = 0; i <= STEPS; i++) {
+    const fraction = from + ((to - from) * i) / STEPS
+    const point = pointAtFraction(g, fraction)
+    if (!containsPoint(rect, point)) return fraction
+  }
+  // Entirely inside — overlapping cards, or a curve shorter than the card. Fall back to the
+  // midpoint so callers still get something drawable.
+  return (from + to) / 2
+}
+
+const containsPoint = (rect: Rect, p: Point): boolean =>
+  p.x >= rect.x && p.x <= rect.x + rect.width && p.y >= rect.y && p.y <= rect.y + rect.height
+
+/**
  * A cubic bowing consistently to one side of the straight line A→B. Offsetting both control
  * points on the same side by a fraction of the span gives every spoke the same handedness,
  * which is what produces the pinwheel look of the reference diagram instead of a mess of

@@ -24,9 +24,16 @@ export default defineConfig({
     // faster node environment is the right default.
     environment: 'node',
     include: ['src/**/*.test.ts'],
-    // Vitest 4 defaults to the `forks` pool, which intermittently fails to start here with
-    // "Timeout waiting for worker to respond" — a child-process spawn stall on Windows, not a
-    // test failure. Worker threads are cheaper to start and have been reliable.
+    // Both of Vitest's pools intermittently fail here with "Timeout waiting for worker to respond"
+    // when the machine is busy — worker *startup* stalling, not a test failing. Switching pool type
+    // did not help, because the cost is spawning a worker per test file at all.
+    //
+    // These suites are pure functions over geometry, timelines and layout: no globals to leak, no
+    // DOM to reset, nothing that needs process isolation. So they run in one long-lived thread,
+    // which removes the startup contention and is faster besides.
+    // Vitest 4 removed `poolOptions`; worker counts are top-level now.
     pool: 'threads',
+    maxWorkers: 1,
+    fileParallelism: false,
   },
 })

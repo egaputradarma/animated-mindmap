@@ -61,6 +61,6 @@
     { "from": "hub", "to": "run" },
     { "from": "hub", "to": "secops" },
     { "from": "hub", "to": "cost" },
-    { "from": "hub", "to": "automate", "dashed": true }
+    { "from": "hub", "to": "automate", "weight": "semi" }
   ]
 }

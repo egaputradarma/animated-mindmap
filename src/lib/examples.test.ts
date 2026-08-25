@@ -77,10 +77,12 @@ describe('starter library', () => {
     expect(mindmap.nodes.filter(n => n.hero)).toHaveLength(1)
   })
 
-  it('keeps the dashed "not yet there" edge on both variants', () => {
+  it('keeps the "not yet there" connection on both variants', () => {
     for (const file of ['it-ops-roadmap-overview.json', 'it-ops-roadmap-full.json']) {
       const { mindmap } = load(file)
-      expect(mindmap.edges.filter(e => e.dashed)).toHaveLength(1)
+      // Semi weight draws the dashed line; the reserved node is what stops a packet travelling it.
+      // Both are needed for the "planned, not wired" reading, and neither implies the other.
+      expect(mindmap.edges.filter(e => e.weight === 'semi')).toHaveLength(1)
       expect(mindmap.nodes.filter(n => n.reserved)).toHaveLength(1)
     }
   })

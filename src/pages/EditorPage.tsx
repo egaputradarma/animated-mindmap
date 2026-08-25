@@ -8,6 +8,7 @@ import ReactFlow, {
   ConnectionMode,
   Controls,
   Handle,
+  MarkerType,
   MiniMap,
   Position,
   ReactFlowProvider,
@@ -19,14 +20,40 @@ import ReactFlow, {
   type NodeProps,
 } from 'reactflow'
 import 'reactflow/dist/style.css'
-import { ArrowLeft, Check, Clipboard, Plus, Sparkles, Trash2 } from 'lucide-react'
+import { ArrowLeft, ArrowLeftRight, Check, Clipboard, Plus, Sparkles, Trash2 } from 'lucide-react'
 import AppLogo from '../components/AppLogo'
-import { Banner, Button, Field, SectionHeading, Select, TextInput, Toggle } from '../components/ui'
+import {
+  Banner,
+  Button,
+  Field,
+  SectionHeading,
+  SegmentedControl,
+  Select,
+  TextInput,
+  Toggle,
+} from '../components/ui'
 import { exportAuthoringJson } from '../lib/importMindmap'
 import { accentColour, rgba } from '../lib/palette'
 import { getMindmap, saveMindmap } from '../lib/storage'
 import { uid } from '../lib/id'
-import { ACCENT_NAMES, emptyNode, type AccentName, type Mindmap, type MindmapNode } from '../types/mindmap'
+import {
+  ACCENT_NAMES,
+  DEFAULT_EDGE_ARROW,
+  DEFAULT_EDGE_WEIGHT,
+  EDGE_ARROW_LABELS,
+  EDGE_ARROWS,
+  EDGE_WEIGHT_LABELS,
+  EDGE_WEIGHTS,
+  edgeArrowOf,
+  edgeWeightOf,
+  emptyNode,
+  type AccentName,
+  type EdgeArrow,
+  type EdgeWeight,
+  type Mindmap,
+  type MindmapEdge,
+  type MindmapNode,
+} from '../types/mindmap'
 
 /** React Flow node payload. Carries the domain node straight through. */
 interface CardData {
@@ -76,6 +103,61 @@ function CardNode({ data, selected }: NodeProps<CardData>) {
 
 const NODE_TYPES = { card: CardNode }
 
+/** Weight and arrow ride along on the React Flow edge so `style` stays a derived value. */
+interface EdgeData {
+  weight: EdgeWeight
+  arrow: EdgeArrow
+}
+
+const EDGE_STROKE = '#64748b'
+
+/** Editor preview of a weight, chosen to echo what renderer.ts draws in the animation. */
+const FLOW_WEIGHT: Record<EdgeWeight, { width: number; dash?: string }> = {
+  heavy: { width: 3.4 },
+  standard: { width: 1.8 },
+  semi: { width: 1.5, dash: '7 6' },
+}
+
+const ARROW_MARKER = { type: MarkerType.ArrowClosed, color: EDGE_STROKE, width: 18, height: 18 } as const
+
+/** Explains each weight in the terms the feature was asked for. */
+const WEIGHT_HINTS: Record<EdgeWeight, string> = {
+  heavy: 'Heavy delivery — thick solid line, larger packet.',
+  standard: 'Standard delivery — normal solid line.',
+  semi: 'Semi delivery — thinner dashed line.',
+}
+
+const currentWeight = (edge: Edge): EdgeWeight => ((edge.data as Partial<EdgeData>)?.weight ?? DEFAULT_EDGE_WEIGHT)
+const currentArrow = (edge: Edge): EdgeArrow => ((edge.data as Partial<EdgeData>)?.arrow ?? DEFAULT_EDGE_ARROW)
+
+/** Human-readable node name for the connection header, falling back to the key. */
+const labelFor = (nodes: Node<CardData>[], key: string): string =>
+  nodes.find(n => n.id === key)?.data.node.label ?? key
+
+/** Maps a domain edge onto the React Flow edge the canvas renders. */
+function toFlowEdge(edge: MindmapEdge): Edge {
+  const weight = edgeWeightOf(edge)
+  const arrow = edgeArrowOf(edge)
+  const style = FLOW_WEIGHT[weight]
+
+  return {
+    id: edge.id,
+    source: edge.source_node_key,
+    target: edge.target_node_key,
+    label: edge.label ?? undefined,
+    data: { weight, arrow } satisfies EdgeData,
+    // Only the flowing weights animate, mirroring the packet suppression in the animation.
+    animated: weight !== 'semi',
+    style: { stroke: EDGE_STROKE, strokeWidth: style.width, strokeDasharray: style.dash },
+    markerEnd: arrow === 'end' || arrow === 'both' ? ARROW_MARKER : undefined,
+    markerStart: arrow === 'start' || arrow === 'both' ? ARROW_MARKER : undefined,
+    labelStyle: { fill: '#cbd5e1', fontSize: 11 },
+    labelBgStyle: { fill: '#0d1120' },
+    labelBgPadding: [6, 3] as [number, number],
+    labelBgBorderRadius: 4,
+  }
+}
+
 export default function EditorPage() {
   return (
     <ReactFlowProvider>
@@ -91,7 +173,11 @@ function EditorInner() {
   const [mindmap, setMindmap] = useState<Mindmap | null | 'missing'>(null)
   const [nodes, setNodes] = useState<Node<CardData>[]>([])
   const [edges, setEdges] = useState<Edge[]>([])
-  const [selectedId, setSelectedId] = useState<string | null>(null)
+  // One selection across both kinds, so picking an edge clears any selected node and the inspector
+  // never has to guess which panel to show.
+  const [selected, setSelected] = useState<{ kind: 'node' | 'edge'; id: string } | null>(null)
+  const selectedId = selected?.kind === 'node' ? selected.id : null
+  const selectedEdgeId = selected?.kind === 'edge' ? selected.id : null
   const [name, setName] = useState('')
   const [saved, setSaved] = useState(false)
   const [copied, setCopied] = useState(false)
@@ -115,20 +201,15 @@ function EditorInner() {
         data: { node },
       })),
     )
-    setEdges(
-      loaded.edges.map(edge => ({
-        id: edge.id,
-        source: edge.source_node_key,
-        target: edge.target_node_key,
-        label: edge.label ?? undefined,
-        animated: !edge.dashed,
-        style: { stroke: '#475569', strokeDasharray: edge.dashed ? '6 5' : undefined },
-      })),
-    )
+    setEdges(loaded.edges.map(toFlowEdge))
     hydrated.current = true
   }, [id])
 
   const selectedNode = useMemo(() => nodes.find(n => n.id === selectedId) ?? null, [nodes, selectedId])
+  const selectedEdge = useMemo(
+    () => edges.find(e => e.id === selectedEdgeId) ?? null,
+    [edges, selectedEdgeId],
+  )
 
   const toMindmap = useCallback((): Mindmap | null => {
     if (!mindmap || mindmap === 'missing') return null
@@ -141,13 +222,20 @@ function EditorInner() {
         position_x: Math.round(n.position.x),
         position_y: Math.round(n.position.y),
       })),
-      edges: edges.map(e => ({
-        id: e.id,
-        source_node_key: e.source,
-        target_node_key: e.target,
-        label: typeof e.label === 'string' ? e.label : null,
-        dashed: typeof e.style?.strokeDasharray === 'string',
-      })),
+      edges: edges.map(e => {
+        // Weight and arrow live in `data`, and the React Flow `style` is derived from them. Reading
+        // them back out of the rendered style would mean parsing a dasharray string to recover a
+        // value we already had.
+        const data = (e.data ?? {}) as Partial<EdgeData>
+        return {
+          id: e.id,
+          source_node_key: e.source,
+          target_node_key: e.target,
+          label: typeof e.label === 'string' && e.label ? e.label : null,
+          weight: data.weight ?? DEFAULT_EDGE_WEIGHT,
+          arrow: data.arrow ?? DEFAULT_EDGE_ARROW,
+        }
+      }),
     }
   }, [mindmap, name, nodes, edges])
 
@@ -184,6 +272,52 @@ function EditorInner() {
     )
   }
 
+  /** Applies a change to the selected edge and re-derives its rendered style. */
+  const patchSelectedEdge = (patch: Partial<EdgeData> & { label?: string | null }) => {
+    if (!selectedEdgeId) return
+    setEdges(current =>
+      current.map(e => {
+        if (e.id !== selectedEdgeId) return e
+        const data = (e.data ?? {}) as Partial<EdgeData>
+        // Rebuilt through toFlowEdge rather than patched in place, so style, markers and the
+        // animated flag cannot drift out of step with weight and arrow.
+        return toFlowEdge({
+          id: e.id,
+          source_node_key: e.source,
+          target_node_key: e.target,
+          label: patch.label !== undefined ? patch.label : typeof e.label === 'string' ? e.label : null,
+          weight: patch.weight ?? data.weight ?? DEFAULT_EDGE_WEIGHT,
+          arrow: patch.arrow ?? data.arrow ?? DEFAULT_EDGE_ARROW,
+        })
+      }),
+    )
+  }
+
+  const deleteSelectedEdge = () => {
+    if (!selectedEdgeId) return
+    setEdges(current => current.filter(e => e.id !== selectedEdgeId))
+    setSelected(null)
+  }
+
+  /** Swaps which end is source and which is target, flipping the connection's direction. */
+  const reverseSelectedEdge = () => {
+    if (!selectedEdgeId) return
+    setEdges(current =>
+      current.map(e => {
+        if (e.id !== selectedEdgeId) return e
+        const data = (e.data ?? {}) as Partial<EdgeData>
+        return toFlowEdge({
+          id: e.id,
+          source_node_key: e.target,
+          target_node_key: e.source,
+          label: typeof e.label === 'string' ? e.label : null,
+          weight: data.weight ?? DEFAULT_EDGE_WEIGHT,
+          arrow: data.arrow ?? DEFAULT_EDGE_ARROW,
+        })
+      }),
+    )
+  }
+
   /** Only one node may be the hub, so setting it clears the flag everywhere else. */
   const setHero = (value: boolean) => {
     if (!selectedId) return
@@ -205,19 +339,24 @@ function EditorInner() {
 
     // Wire it to the selection immediately — an orphan node contributes nothing to the layout.
     if (selectedId) {
-      setEdges(current => [
-        ...current,
-        { id: uid('e'), source: selectedId, target: key, animated: true, style: { stroke: '#475569' } },
-      ])
+      const created = toFlowEdge({
+        id: uid('e'),
+        source_node_key: selectedId,
+        target_node_key: key,
+        label: null,
+        weight: DEFAULT_EDGE_WEIGHT,
+        arrow: DEFAULT_EDGE_ARROW,
+      })
+      setEdges(current => [...current, created])
     }
-    setSelectedId(key)
+    setSelected({ kind: 'node', id: key })
   }
 
   const deleteSelected = () => {
     if (!selectedId || nodes.length <= 1) return
     setNodes(current => current.filter(n => n.id !== selectedId))
     setEdges(current => current.filter(e => e.source !== selectedId && e.target !== selectedId))
-    setSelectedId(null)
+    setSelected(null)
   }
 
   const copyJson = async () => {
@@ -300,13 +439,22 @@ function EditorInner() {
           nodeTypes={NODE_TYPES}
           onNodesChange={(changes: NodeChange[]) => setNodes(current => applyNodeChanges(changes, current))}
           onEdgesChange={(changes: EdgeChange[]) => setEdges(current => applyEdgeChanges(changes, current))}
-          onConnect={(connection: Connection) =>
-            setEdges(current =>
-              addEdge({ ...connection, id: uid('e'), animated: true, style: { stroke: '#475569' } }, current),
-            )
-          }
-          onNodeClick={(_e, node) => setSelectedId(node.id)}
-          onPaneClick={() => setSelectedId(null)}
+          onConnect={(connection: Connection) => {
+            if (!connection.source || !connection.target) return
+            const created = toFlowEdge({
+              id: uid('e'),
+              source_node_key: connection.source,
+              target_node_key: connection.target,
+              label: null,
+              weight: DEFAULT_EDGE_WEIGHT,
+              arrow: DEFAULT_EDGE_ARROW,
+            })
+            // addEdge still runs so React Flow's own duplicate-connection guard applies.
+            setEdges(current => addEdge(created, current))
+          }}
+          onNodeClick={(_e, node) => setSelected({ kind: 'node', id: node.id })}
+          onEdgeClick={(_e, edge) => setSelected({ kind: 'edge', id: edge.id })}
+          onPaneClick={() => setSelected(null)}
           connectionMode={ConnectionMode.Loose}
           fitView
           proOptions={{ hideAttribution: true }}
@@ -388,11 +536,56 @@ function EditorInner() {
           </aside>
         )}
 
-        {!selectedNode && (
+        {selectedEdge && (
+          <aside className="absolute right-3 top-3 z-10 w-72 space-y-3 rounded-xl border border-ink-700 bg-ink-900/95 p-4 shadow-2xl backdrop-blur">
+            <SectionHeading>Connection</SectionHeading>
+
+            <p className="text-[11px] leading-snug text-slate-500">
+              <span className="text-slate-300">{labelFor(nodes, selectedEdge.source)}</span>
+              {' → '}
+              <span className="text-slate-300">{labelFor(nodes, selectedEdge.target)}</span>
+            </p>
+
+            <Field label="Type" hint={WEIGHT_HINTS[currentWeight(selectedEdge)]}>
+              <SegmentedControl<EdgeWeight>
+                value={currentWeight(selectedEdge)}
+                onChange={v => patchSelectedEdge({ weight: v })}
+                options={EDGE_WEIGHTS.map(w => ({ value: w, label: EDGE_WEIGHT_LABELS[w] }))}
+              />
+            </Field>
+
+            <Field label="Arrows" hint="Which ends of the line get an arrowhead.">
+              <SegmentedControl<EdgeArrow>
+                value={currentArrow(selectedEdge)}
+                onChange={v => patchSelectedEdge({ arrow: v })}
+                options={EDGE_ARROWS.map(a => ({ value: a, label: EDGE_ARROW_LABELS[a] }))}
+              />
+            </Field>
+
+            <Field label="Label" hint="Optional chip drawn mid-line.">
+              <TextInput
+                value={typeof selectedEdge.label === 'string' ? selectedEdge.label : ''}
+                onChange={v => patchSelectedEdge({ label: v || null })}
+                placeholder="e.g. to-be"
+                maxLength={40}
+                ariaLabel="Connection label"
+              />
+            </Field>
+
+            <Button onClick={reverseSelectedEdge} className="w-full">
+              <ArrowLeftRight size={13} /> Reverse direction
+            </Button>
+            <Button variant="danger" onClick={deleteSelectedEdge} className="w-full">
+              <Trash2 size={13} /> Delete connection
+            </Button>
+          </aside>
+        )}
+
+        {!selectedNode && !selectedEdge && (
           <div className="pointer-events-none absolute bottom-3 left-1/2 z-10 -translate-x-1/2">
             <Banner tone="info">
-              Click a node to edit it · drag from any edge of a card to connect · positions only matter in
-              &ldquo;As arranged&rdquo; mode
+              Click a node or a connection to edit it · drag from any edge of a card to connect ·
+              positions only matter in &ldquo;As arranged&rdquo; mode
             </Banner>
           </div>
         )}

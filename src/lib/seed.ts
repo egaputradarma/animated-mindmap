@@ -106,12 +106,15 @@ function eaToolsSystemMap(): Mindmap {
       },
     ],
     edges: [
-      { id: 'e-browser', source_node_key: 'hero', target_node_key: 'browser', label: null, dashed: false },
-      { id: 'e-entra', source_node_key: 'hero', target_node_key: 'entra', label: null, dashed: false },
-      { id: 'e-mail', source_node_key: 'hero', target_node_key: 'mail', label: null, dashed: false },
-      { id: 'e-sql', source_node_key: 'hero', target_node_key: 'sql', label: null, dashed: false },
-      { id: 'e-cicd', source_node_key: 'hero', target_node_key: 'cicd', label: null, dashed: false },
-      { id: 'e-llm', source_node_key: 'hero', target_node_key: 'llm', label: 'to-be', dashed: true },
+      // The SPA and the database are the load-bearing paths, so they carry heavy weight.
+      { id: 'e-browser', source_node_key: 'hero', target_node_key: 'browser', label: null, weight: 'heavy' },
+      { id: 'e-entra', source_node_key: 'hero', target_node_key: 'entra', label: null, weight: 'standard' },
+      { id: 'e-mail', source_node_key: 'hero', target_node_key: 'mail', label: null, weight: 'semi' },
+      { id: 'e-sql', source_node_key: 'hero', target_node_key: 'sql', label: null, weight: 'heavy' },
+      { id: 'e-cicd', source_node_key: 'hero', target_node_key: 'cicd', label: null, weight: 'standard' },
+      // Semi weight plus a reserved target: dashed line, and no packet because nothing flows to a
+      // node that is not wired up yet.
+      { id: 'e-llm', source_node_key: 'hero', target_node_key: 'llm', label: 'to-be', weight: 'semi' },
     ],
     updated_at: new Date().toISOString(),
   }

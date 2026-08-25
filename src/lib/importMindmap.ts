@@ -17,7 +17,19 @@
 // because that is the only place MICA has to put it without a schema migration.
 
 import { uid } from './id'
-import { ACCENT_NAMES, type AccentName, type Mindmap, type MindmapEdge, type MindmapNode } from '../types/mindmap'
+import {
+  ACCENT_NAMES,
+  DEFAULT_EDGE_ARROW,
+  DEFAULT_EDGE_WEIGHT,
+  EDGE_ARROWS,
+  EDGE_WEIGHTS,
+  type AccentName,
+  type EdgeArrow,
+  type EdgeWeight,
+  type Mindmap,
+  type MindmapEdge,
+  type MindmapNode,
+} from '../types/mindmap'
 
 export type SourceFormat = 'authoring' | 'mica-front' | 'mica-api' | 'reactflow'
 
@@ -41,6 +53,16 @@ const bool = (v: unknown): boolean => v === true
 function accent(v: unknown): AccentName | null {
   const s = str(v)?.toLowerCase()
   return s && (ACCENT_NAMES as readonly string[]).includes(s) ? (s as AccentName) : null
+}
+
+function edgeWeight(v: unknown): EdgeWeight | null {
+  const s = str(v)?.toLowerCase()
+  return s && (EDGE_WEIGHTS as readonly string[]).includes(s) ? (s as EdgeWeight) : null
+}
+
+function edgeArrow(v: unknown): EdgeArrow | null {
+  const s = str(v)?.toLowerCase()
+  return s && (EDGE_ARROWS as readonly string[]).includes(s) ? (s as EdgeArrow) : null
 }
 
 /** MICA stores presentation metadata as a JSON string. Unparseable is not an error here. */
@@ -180,12 +202,18 @@ export function importMindmap(raw: string): ImportResult {
     pairs.add(pair)
 
     const meta = parseDataJson(src.data_json ?? src.dataJson)
+    // `dashed` is still accepted from every source: it is what older library files and MICA
+    // payloads carry, and a React Flow dump expresses it as a dasharray in `style`.
+    const legacyDashed =
+      bool(src.dashed) || bool(meta.dashed) || str(src.style)?.includes('dash') === true
+
     edges.push({
       id: str(src.id) ?? uid('e'),
       source_node_key: from,
       target_node_key: to,
       label: str(src.label),
-      dashed: bool(src.dashed) || bool(meta.dashed) || str(src.style)?.includes('dash') === true,
+      weight: edgeWeight(src.weight ?? meta.weight) ?? (legacyDashed ? 'semi' : DEFAULT_EDGE_WEIGHT),
+      arrow: edgeArrow(src.arrow ?? meta.arrow) ?? DEFAULT_EDGE_ARROW,
     })
   }
 
@@ -227,7 +255,9 @@ export function exportAuthoringJson(m: Mindmap): string {
         from: e.source_node_key,
         to: e.target_node_key,
         label: e.label || undefined,
-        dashed: e.dashed || undefined,
+        // Defaults stay omitted so a round-trip produces the same terse JSON it came from.
+        weight: e.weight && e.weight !== DEFAULT_EDGE_WEIGHT ? e.weight : undefined,
+        arrow: e.arrow && e.arrow !== DEFAULT_EDGE_ARROW ? e.arrow : undefined,
       })),
     },
     null,

@@ -51,6 +51,6 @@
     { "from": "hub", "to": "runbooks" },
     { "from": "hub", "to": "automation" },
     { "from": "hub", "to": "aiops" },
-    { "from": "hub", "to": "aisupport", "dashed": true }
+    { "from": "hub", "to": "aisupport", "weight": "semi" }
   ]
 }

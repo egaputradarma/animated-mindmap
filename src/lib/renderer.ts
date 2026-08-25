@@ -23,9 +23,10 @@
 // addressable, output is deterministic and reproducible, and it renders at any resolution.
 // The cost is that the reference's CSS had to be hand-ported, which is what this file is.
 
-import { pointAtFraction } from './bezier'
+import { pointAtFraction, tangentAtFraction } from './bezier'
 import type { Layout, PlacedEdge, PlacedNode } from './layout'
-import { accentColour, mix, rgba, type Theme } from './palette'
+import { accentColour, mix, rgba, type Rgb, type Theme } from './palette'
+import type { EdgeWeight } from '../types/mindmap'
 import { edgeState, frameState, nodeState, seedFromString, type TimelineOptions } from './timeline'
 import { ellipsise, wrapText } from './text'
 
@@ -33,6 +34,22 @@ import { ellipsise, wrapText } from './text'
 const WIRE_BASE_WIDTH = 5
 const WIRE_WIDTH = 2.4
 const PACKET_RADIUS = 5.2
+
+/**
+ * Per-weight presentation. `standard` is the baseline the reference diagram uses; the other two
+ * are scaled from it so the three read as one family rather than three unrelated line styles.
+ *
+ * `dash` is in abstract units and gets scaled like everything else, so the dash rhythm stays
+ * proportional instead of turning into a dotted line at high export resolutions.
+ */
+const WEIGHT_STYLE: Record<EdgeWeight, { wire: number; base: number; dash: number[] | null; packet: number }> = {
+  heavy: { wire: WIRE_WIDTH * 1.85, base: WIRE_BASE_WIDTH * 1.5, dash: null, packet: 1.25 },
+  standard: { wire: WIRE_WIDTH, base: WIRE_BASE_WIDTH, dash: null, packet: 1 },
+  semi: { wire: WIRE_WIDTH * 0.85, base: WIRE_BASE_WIDTH * 0.8, dash: [7, 6], packet: 0.8 },
+}
+
+/** Arrowhead length in abstract units; width is derived from it. */
+const ARROW_LENGTH = 13
 const CARD_RADIUS = 12
 const RISE_DISTANCE = 14
 
@@ -72,6 +89,7 @@ export function drawFrame(ctx: CanvasRenderingContext2D, layout: Layout, options
   // between the two so they slide under a card rather than over it.
   for (const edge of layout.edges) drawWireBase(ctx, edge, layout, theme, t, options.timeline)
   for (const edge of layout.edges) drawWire(ctx, edge, layout, theme, t, options.timeline)
+  for (const edge of layout.edges) drawArrows(ctx, edge, layout, theme, t, options.timeline)
   for (const edge of layout.edges) drawPacket(ctx, edge, layout, theme, t, options.timeline)
   for (const node of layout.nodes) drawCard(ctx, node, layout, theme, t, options.timeline, frame.hubPulse)
 
@@ -167,7 +185,7 @@ function drawWireBase(
   ctx.save()
   ctx.globalAlpha *= 0.6
   ctx.strokeStyle = rgba(theme.wireBase)
-  ctx.lineWidth = WIRE_BASE_WIDTH * layout.scale
+  ctx.lineWidth = WEIGHT_STYLE[edge.weight].base * layout.scale
   ctx.lineCap = 'round'
   applyDrawOn(ctx, edge, state.draw)
   tracePath(ctx, edge)
@@ -186,31 +204,141 @@ function drawWire(
   const state = edgeState(t, edge.order, seedFromString(edge.edge.id), timeline)
   if (state.draw <= 0.001) return
 
-  // A dashed edge means "planned, not wired" — it keeps the base stroke and the dash pattern
-  // but never gets a bright overlay or a packet, matching `.wire-base.dashed`.
-  if (edge.dashed) {
-    ctx.save()
-    ctx.globalAlpha *= 0.4
-    ctx.strokeStyle = rgba(theme.wireBase)
-    ctx.lineWidth = WIRE_BASE_WIDTH * layout.scale
-    ctx.setLineDash([6 * layout.scale, 7 * layout.scale])
+  const style = WEIGHT_STYLE[edge.weight]
+  const colour = accentColour(theme.name, edge.accent)
+
+  ctx.save()
+  // An inert connection (either end marked "planned") stays dim and uncoloured, matching the
+  // reference's treatment of a path that exists on paper but carries nothing.
+  ctx.globalAlpha *= edge.inert ? 0.45 : 0.92
+  ctx.strokeStyle = edge.inert ? rgba(theme.wireBase) : rgba(colour)
+  ctx.lineWidth = style.wire * layout.scale
+  ctx.lineCap = style.dash ? 'butt' : 'round'
+
+  if (style.dash) {
+    // A dashed line cannot also use the dash pattern to animate its draw-on, so the two are
+    // combined by revealing the stroke with a clip instead.
+    drawDashedWithReveal(ctx, edge, layout, style.dash, state.draw)
+  } else {
+    applyDrawOn(ctx, edge, state.draw)
     tracePath(ctx, edge)
     ctx.stroke()
-    ctx.restore()
+  }
+
+  if (edge.edge.label) drawEdgeLabel(ctx, edge, layout, theme, state.draw)
+  ctx.restore()
+}
+
+/**
+ * Draws a dashed stroke that still animates in.
+ *
+ * `applyDrawOn` works by hijacking the dash pattern, so it cannot coexist with a line that is
+ * meant to be dashed in the first place. Clipping to the swept portion of the curve gives the same
+ * reveal while leaving the dash rhythm intact. The clip is a thick stroked path rather than a
+ * rectangle so it follows the curve instead of wiping across it.
+ */
+function drawDashedWithReveal(
+  ctx: CanvasRenderingContext2D,
+  edge: PlacedEdge,
+  layout: Layout,
+  dash: number[],
+  progress: number,
+): void {
+  const dashPattern = dash.map(d => d * layout.scale)
+  const total = edge.geom.length
+
+  if (progress >= 0.999 || total === 0) {
+    ctx.setLineDash(dashPattern)
+    tracePath(ctx, edge)
+    ctx.stroke()
     return
   }
 
-  const colour = accentColour(theme.name, edge.accent)
-  ctx.save()
-  ctx.globalAlpha *= 0.92
-  ctx.strokeStyle = rgba(colour)
-  ctx.lineWidth = WIRE_WIDTH * layout.scale
-  ctx.lineCap = 'round'
-  applyDrawOn(ctx, edge, state.draw)
+  // Spell out the dashes that fall inside the revealed length, then end the pattern with a gap
+  // longer than the whole curve so nothing beyond it draws. Canvas dash arrays alternate on/off
+  // starting with on, so the parity of the array decides whether that trailing entry is a gap or
+  // a solid run — get it wrong and the "hidden" remainder renders as a continuous line.
+  const visible = total * progress
+  const segments: number[] = []
+  let covered = 0
+  let index = 0
+  while (covered < visible) {
+    const segment = dashPattern[index % dashPattern.length]
+    segments.push(Math.min(segment, visible - covered))
+    covered += segment
+    index++
+  }
+
+  // Even length means the next slot would be "on"; a zero-length dash flips it to "off".
+  if (segments.length % 2 === 0) segments.push(0)
+  segments.push(total)
+
+  ctx.setLineDash(segments)
   tracePath(ctx, edge)
   ctx.stroke()
+}
 
-  if (edge.edge.label) drawEdgeLabel(ctx, edge, layout, theme, state.draw)
+/** Arrowheads at whichever ends the edge asks for. */
+function drawArrows(
+  ctx: CanvasRenderingContext2D,
+  edge: PlacedEdge,
+  layout: Layout,
+  theme: Theme,
+  t: number,
+  timeline: TimelineOptions,
+): void {
+  if (edge.arrow === 'none') return
+
+  const state = edgeState(t, edge.order, seedFromString(edge.edge.id), timeline)
+  // Only once the wire has essentially landed: an arrowhead floating ahead of its own line looks
+  // like a rendering fault.
+  if (state.draw < 0.92) return
+
+  const colour = edge.inert ? theme.wireBase : accentColour(theme.name, edge.accent)
+  const alpha = (edge.inert ? 0.5 : 1) * Math.min(1, (state.draw - 0.92) / 0.08)
+  const size = ARROW_LENGTH * layout.scale * (edge.weight === 'heavy' ? 1.2 : edge.weight === 'semi' ? 0.85 : 1)
+
+  if (edge.arrow === 'end' || edge.arrow === 'both') {
+    drawArrowHead(ctx, edge, edge.endTrim, 1, colour, size, alpha)
+  }
+  if (edge.arrow === 'start' || edge.arrow === 'both') {
+    // Reversed: at the source end the head must point back out of the card, against travel.
+    drawArrowHead(ctx, edge, edge.startTrim, -1, colour, size, alpha)
+  }
+}
+
+/** `size` already carries `layout.scale`, so this needs no layout of its own. */
+function drawArrowHead(
+  ctx: CanvasRenderingContext2D,
+  edge: PlacedEdge,
+  at: number,
+  direction: 1 | -1,
+  colour: Rgb,
+  size: number,
+  alpha: number,
+): void {
+  const tip = pointAtFraction(edge.geom, at)
+  const tangent = tangentAtFraction(edge.geom, at)
+  const dx = tangent.x * direction
+  const dy = tangent.y * direction
+
+  // Perpendicular, for the two trailing corners.
+  const nx = -dy
+  const ny = dx
+  const halfWidth = size * 0.42
+
+  ctx.save()
+  ctx.setLineDash([])
+  ctx.globalAlpha *= alpha
+  ctx.fillStyle = rgba(colour)
+  ctx.beginPath()
+  ctx.moveTo(tip.x, tip.y)
+  ctx.lineTo(tip.x - dx * size + nx * halfWidth, tip.y - dy * size + ny * halfWidth)
+  // Slight notch on the trailing edge so the head reads as an arrow rather than a plain triangle.
+  ctx.lineTo(tip.x - dx * size * 0.72, tip.y - dy * size * 0.72)
+  ctx.lineTo(tip.x - dx * size - nx * halfWidth, tip.y - dy * size - ny * halfWidth)
+  ctx.closePath()
+  ctx.fill()
   ctx.restore()
 }
 
@@ -277,14 +405,16 @@ function drawPacket(
   t: number,
   timeline: TimelineOptions,
 ): void {
-  if (edge.dashed) return
+  // Nothing travels along a connection that is not wired up. This is the "planned, not wired"
+  // semantic the reference conveys, now keyed off the endpoint node rather than the line style —
+  // so a dashed line can carry traffic and a solid one can be inert.
+  if (edge.inert) return
   const state = edgeState(t, edge.order, seedFromString(edge.edge.id), timeline)
   if (state.packet === null) return
 
-  // Keep the packet clear of both cards. Travelling the full 0..1 would bury it under the
-  // card art at each end, and the reference gets away with that only because its packets are
-  // small relative to the gap.
-  const travel = 0.07 + state.packet * 0.86
+  // Travel between the card edges, measured per edge at layout time. The previous fixed 0.07/0.86
+  // inset was tuned for one card size and let packets slide under larger cards.
+  const travel = edge.startTrim + state.packet * (edge.endTrim - edge.startTrim)
   const at = pointAtFraction(edge.geom, travel)
   const colour = accentColour(theme.name, edge.accent)
 
@@ -299,7 +429,8 @@ function drawPacket(
   ctx.shadowBlur = 9 * layout.scale
   ctx.fillStyle = rgba(colour)
   ctx.beginPath()
-  ctx.arc(at.x, at.y, PACKET_RADIUS * layout.scale, 0, Math.PI * 2)
+  // Heavier lines carry a larger packet, so weight reads even in a still frame.
+  ctx.arc(at.x, at.y, PACKET_RADIUS * WEIGHT_STYLE[edge.weight].packet * layout.scale, 0, Math.PI * 2)
   ctx.fill()
   // Second pass deepens the bloom; one pass at high blur washes the core out.
   ctx.fill()

@@ -10,10 +10,42 @@
 // It also means type scales with the cards, so legibility tracks how much of the frame the
 // graph fills rather than the pixel dimensions.
 
-import { arcBetween, measure as measureCurve, type CurveGeometry, type Point } from './bezier'
+import {
+  arcBetween,
+  fractionOutside,
+  measure as measureCurve,
+  type CurveGeometry,
+  type Point,
+  type Rect,
+} from './bezier'
 import { buildGraph, edgeRevealOrder, leafCounts, revealOrder, type GraphView } from './graph'
 import { estimator, wrapText } from './text'
-import { ACCENT_NAMES, type AccentName, type Mindmap, type MindmapEdge, type MindmapNode } from '../types/mindmap'
+import {
+  ACCENT_NAMES,
+  edgeArrowOf,
+  edgeWeightOf,
+  type AccentName,
+  type EdgeArrow,
+  type EdgeWeight,
+  type Mindmap,
+  type MindmapEdge,
+  type MindmapNode,
+} from '../types/mindmap'
+
+/**
+ * Card bounds, padded slightly so a wire clears the visible border rather than stopping flush
+ * against it. Returns null for a missing node so callers can fall back.
+ */
+function cardRect(node: PlacedNode | undefined): Rect | null {
+  if (!node) return null
+  const pad = Math.max(2, node.w * 0.03)
+  return {
+    x: node.x - node.w / 2 - pad,
+    y: node.y - node.h / 2 - pad,
+    width: node.w + pad * 2,
+    height: node.h + pad * 2,
+  }
+}
 
 /** Abstract card width. Every other size in the abstract space is a ratio of this. */
 const CARD_W = 150
@@ -79,7 +111,18 @@ export interface PlacedEdge {
   /** Reveal slot — the later of the two endpoints, so a wire never predates a card. */
   order: number
   accent: AccentName
-  dashed: boolean
+  weight: EdgeWeight
+  arrow: EdgeArrow
+  /** Fraction at which the curve clears the source card. Arrowheads and packets start here. */
+  startTrim: number
+  /** Fraction at which the curve reaches the target card. Arrowheads and packets end here. */
+  endTrim: number
+  /**
+   * True when either endpoint is marked `reserved`. Nothing flows to a connection that is not
+   * wired up, so the renderer suppresses the packet — this is the "planned, not wired" semantic
+   * that used to be conflated with a dashed line.
+   */
+  inert: boolean
 }
 
 export interface Layout {
@@ -379,6 +422,8 @@ function fitToCanvas(
     }
   })
 
+  const placedById = new Map(placed.map(p => [p.key, p]))
+
   const placedEdges: PlacedEdge[] = []
   for (const edge of edges) {
     const a = byKey.get(edge.source_node_key)
@@ -387,14 +432,39 @@ function fitToCanvas(
 
     const from = toCanvas(a)
     const to = toCanvas(b)
+    const geom = measureCurve(arcBetween(from, to, options.curvature))
+
+    // Trims are resolved once here rather than per frame: the geometry is fixed for the life of a
+    // layout, and the sampling below is far too costly to repeat 300 times during an export.
+    // Searched across the whole curve rather than just the near half. A card's half-height can be
+    // most of the distance to a vertically-adjacent neighbour, so the exit point legitimately sits
+    // past the midpoint and a narrower window would miss it.
+    const sourceRect = cardRect(placedById.get(a.key))
+    const targetRect = cardRect(placedById.get(b.key))
+    let startTrim = sourceRect ? fractionOutside(geom, sourceRect, 0, 1) : 0.07
+    let endTrim = targetRect ? fractionOutside(geom, targetRect, 1, 0) : 0.93
+
+    if (startTrim >= endTrim) {
+      // The two cards cover the entire curve between them, which happens when they overlap or sit
+      // closer than their own dimensions. There is no truly visible stretch, so a thin band around
+      // the midpoint at least keeps arrowheads and packets on the line and in the right order.
+      const middle = (startTrim + endTrim) / 2
+      startTrim = Math.max(0, middle - 0.04)
+      endTrim = Math.min(1, middle + 0.04)
+    }
+
     placedEdges.push({
       edge,
-      geom: measureCurve(arcBetween(from, to, options.curvature)),
+      geom,
       order: edgeRevealOrder(edge, order),
       // The wire takes the colour of whichever end is further from the hub, so a spoke
       // matches the branch it feeds rather than the hub it leaves.
       accent: (a.depth >= b.depth ? accents.get(a.key) : accents.get(b.key)) ?? 'slate',
-      dashed: edge.dashed === true,
+      weight: edgeWeightOf(edge),
+      arrow: edgeArrowOf(edge),
+      startTrim,
+      endTrim,
+      inert: a.node.reserved === true || b.node.reserved === true,
     })
   }
 
