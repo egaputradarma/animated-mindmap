@@ -1,0 +1,23 @@
+# Development image: Vite dev server with hot reload. Not for production.
+#
+# Only the dependency manifests are baked in; source arrives as a bind mount at run time (see
+# docker-compose.yml). Running `npm ci` here is what seeds the named node_modules volume with
+# LINUX binaries — the host's node_modules holds win32 builds of esbuild and rollup that cannot
+# execute inside the container.
+FROM node:22-bookworm-slim
+
+WORKDIR /app
+
+COPY package.json package-lock.json ./
+RUN npm ci
+
+EXPOSE 5180
+
+# --host overrides the implicit localhost bind: inside the container that is the loopback
+# interface, which the published port cannot reach.
+#
+# vite is exec'd directly rather than through `npm run dev` so that it is PID 1 and receives
+# SIGTERM itself. Under the npm wrapper the signal kills the wrapper, which reports a generic
+# exit code 1 — indistinguishable in Docker Desktop from a real crash. Direct exec stops as 143
+# (128 + SIGTERM), which unambiguously reads as "was stopped".
+CMD ["node_modules/.bin/vite", "--host", "0.0.0.0"]

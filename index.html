@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en" class="dark">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+
+    <!--
+      Icons are generated from public/brand/animated-mindmap-logo.png by tools/make-icons.ps1.
+      The source is 1254x1254 with the artwork occupying 1166x981, so it is cropped to its alpha
+      bounds and recentred rather than scaled as-is — otherwise a third of a browser tab's icon
+      would be the source file's empty letterboxing.
+
+      Two raster sizes because browsers pick per display density instead of resampling one file:
+      32 for standard tabs, 48 for hidpi.
+    -->
+    <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png" />
+    <link rel="icon" type="image/png" sizes="48x48" href="/favicon-48.png" />
+    <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
+
+    <!-- Matches the ink-950 shell so mobile browser chrome does not sit as a light band above a dark app. -->
+    <meta name="theme-color" content="#080b14" />
+
+    <title>Animated Mindmap Generator</title>
+    <meta
+      name="description"
+      content="Draft a mindmap, generate a looping animation from it, and export a watermarked GIF or MP4 ready to post."
+    />
+
+    <!-- Link-preview card, for if this ever gets hosted somewhere shareable. -->
+    <meta property="og:title" content="Animated Mindmap Generator" />
+    <meta
+      property="og:description"
+      content="Draft a mindmap, generate a looping animation from it, and export a watermarked GIF or MP4 ready to post."
+    />
+    <meta property="og:type" content="website" />
+    <meta property="og:image" content="/icon-512.png" />
+  </head>
+  <body class="bg-ink-950 text-slate-200 antialiased">
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

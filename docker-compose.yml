@@ -1,0 +1,79 @@
+# Animated Mindmap Generator — containerised so it can be started and stopped from Docker
+# Desktop or a single command.
+#
+# Usage:
+#   docker compose up -d --build        # build and start (first build pulls ~250 MB of images)
+#   docker compose stop                 # stop, keep the container
+#   docker compose start                # start it again, no rebuild
+#   docker compose down                 # stop and remove the container
+#   docker compose up -d --build app    # rebuild after changing the source
+#
+#   docker compose --profile dev up dev # hot-reload dev server instead (see the `dev` service)
+#
+# In Docker Desktop this appears as one `animated-mindmap-generator` stack: use the play/stop
+# button on that row, then open the link in the Port(s) column.
+#
+# ── Why the port matters more than usual ──
+#
+# Every mindmap, export setting and uploaded signature lives in **browser localStorage**, which
+# is scoped per origin. `http://localhost:5180` and `http://localhost:8080` are different
+# origins, so publishing on a different port shows an empty app with none of your existing
+# mindmaps — they are not lost, just invisible from the other address.
+#
+# 5180 is therefore the default here, matching `npm run dev`, so the container and the local dev
+# server share one set of data. Override with APP_PORT if 5180 is taken, and remember the data
+# stays behind on whichever port created it.
+#
+# ── Reach it on localhost, not a LAN address ──
+#
+# MP4 export uses the WebCodecs API and "Copy JSON" uses the async clipboard; both are gated on
+# a secure context. Browsers treat `localhost` as trustworthy over plain HTTP, but
+# `http://192.168.x.x:5180` is not — those two features silently disappear when the app is opened
+# from another machine by IP. GIF and PNG export are unaffected. Serving to other devices means
+# putting HTTPS in front of this.
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: animated-mindmap-generator:latest
+    container_name: animated-mindmap
+    labels:
+      app.url: "http://localhost:${APP_PORT:-5180}"
+    ports:
+      - "${APP_PORT:-5180}:80"
+    volumes:
+      # Swap the signature without rebuilding: nginx serves this directory straight from the
+      # host. Read-only because the app never writes here — uploads go to localStorage instead.
+      # nginx.conf keeps the cache window short so a replaced file is picked up on refresh.
+      - ./public/brand:/usr/share/nginx/html/brand:ro
+    restart: unless-stopped
+
+  # Hot-reload development. Behind a profile so a plain `docker compose up` does not start it,
+  # and because it would contend with `app` for the same published port.
+  #
+  #   docker compose --profile dev up dev
+  dev:
+    profiles: ["dev"]
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+    container_name: animated-mindmap-dev
+    labels:
+      app.url: "http://localhost:${APP_PORT:-5180}"
+    environment:
+      # inotify events do not cross a Windows bind mount, so the watcher has to poll or it will
+      # never observe an edit. See vite.config.ts.
+      VITE_USE_POLLING: "true"
+    ports:
+      - "${APP_PORT:-5180}:5180"
+    volumes:
+      - .:/app
+      # Linux dependencies from the image; never the host's win32 node_modules.
+      - dev_node_modules:/app/node_modules
+    restart: unless-stopped
+
+volumes:
+  dev_node_modules:
+    name: animated-mindmap-dev-node-modules

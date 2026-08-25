@@ -1,0 +1,15 @@
+# Keep the build context small. `public/` is deliberately NOT excluded — the signature marks in
+# public/brand/ have to be in the image.
+node_modules
+dist
+dist-ssr
+.git
+.kiro
+.vite
+coverage
+*.tsbuildinfo
+*.log
+*.local
+Dockerfile*
+docker-compose.yml
+.dockerignore
