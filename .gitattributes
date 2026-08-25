@@ -1,0 +1,17 @@
+# Normalise line endings. Without this, files committed from Windows can carry CRLF into the
+# Linux Docker build, where a CRLF in a shell script or config is a parse error rather than
+# whitespace.
+* text=auto eol=lf
+
+# PowerShell stays CRLF: Windows PowerShell 5.1 is the default interpreter here and CRLF is its
+# native convention.
+*.ps1 text eol=crlf
+
+# Never touched, never diffed as text.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.webp binary
+*.ico binary
+*.mp4 binary
