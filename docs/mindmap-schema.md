@@ -75,6 +75,23 @@ being legible in-feed, and the layout compensates by scaling everything down.
 }
 ```
 
+## Worked examples
+
+`examples/` holds two versions of the same source infographic, which together show the sizing
+guidance above in practice:
+
+| file | nodes | title at 1200px | in-feed (40%) |
+| --- | --- | --- | --- |
+| `it-ops-roadmap-overview.json` | 8 | 22.9px | 9.2px — readable |
+| `it-ops-roadmap-full.json` | 18 | 10.9px | 4.3px — too small |
+
+Both come from a 17-stage roadmap poster. The overview groups those stages into seven phases and
+pushes the detail into each card's `detail` line; the full version keeps all seventeen as separate
+spokes. Same information, and the only difference is how much of it competes for one ring.
+
+`src/lib/examples.test.ts` asserts those numbers, so the guidance cannot silently drift from what
+the layout actually produces.
+
 ## Other accepted formats
 
 Import also detects, without being told which:

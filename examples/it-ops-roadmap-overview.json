@@ -1,0 +1,66 @@
+{
+  "name": "IT Operations Roadmap",
+  "description": "Seventeen stages, grouped into seven phases",
+  "nodes": [
+    {
+      "key": "hub",
+      "label": "IT Operations",
+      "icon": "🛠️",
+      "detail": "From service desk to AI-assisted operations",
+      "hero": true
+    },
+    {
+      "key": "foundations",
+      "label": "Foundations",
+      "icon": "🧭",
+      "detail": "IT basics, service desk, support tiers"
+    },
+    {
+      "key": "estate",
+      "label": "Estate Control",
+      "icon": "💻",
+      "detail": "Endpoints, access, assets and CMDB"
+    },
+    {
+      "key": "change",
+      "label": "Change Discipline",
+      "icon": "🔁",
+      "detail": "Approval flow, release windows, runbooks"
+    },
+    {
+      "key": "run",
+      "label": "Run & Observe",
+      "icon": "📡",
+      "detail": "Network, backup, monitoring, infrastructure"
+    },
+    {
+      "key": "secops",
+      "label": "Security Operations",
+      "icon": "🛡️",
+      "detail": "Alert triage through to evidence log"
+    },
+    {
+      "key": "cost",
+      "label": "Cost & Vendors",
+      "icon": "💳",
+      "detail": "SaaS ownership, licence use, cost review"
+    },
+    {
+      "key": "automate",
+      "label": "Automate & Augment",
+      "icon": "🤖",
+      "detail": "Automation, AIOps, AI-assisted support",
+      "reserved": true,
+      "tag": "maturity target"
+    }
+  ],
+  "edges": [
+    { "from": "hub", "to": "foundations" },
+    { "from": "hub", "to": "estate" },
+    { "from": "hub", "to": "change" },
+    { "from": "hub", "to": "run" },
+    { "from": "hub", "to": "secops" },
+    { "from": "hub", "to": "cost" },
+    { "from": "hub", "to": "automate", "dashed": true }
+  ]
+}

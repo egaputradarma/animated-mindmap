@@ -1,0 +1,56 @@
+{
+  "name": "IT Operations Roadmap · 17 Stages",
+  "description": "Every stage of the roadmap, with its sub-items summarised",
+  "nodes": [
+    {
+      "key": "hub",
+      "label": "IT Operations",
+      "icon": "🛠️",
+      "detail": "Seventeen stages, foundations to autonomous ops",
+      "hero": true
+    },
+    { "key": "basics", "label": "1 · IT Basics", "icon": "📘", "detail": "Ops model, support tiers, knowledge base" },
+    { "key": "servicedesk", "label": "2 · Service Desk", "icon": "🎫", "detail": "Intake, priority matrix, SLA, escalation" },
+    { "key": "endpoint", "label": "3 · Endpoint", "icon": "💻", "detail": "Inventory, patch, encryption, remote lock" },
+    { "key": "access", "label": "4 · Access", "icon": "🔐", "detail": "Users, groups, roles, MFA, privileged access" },
+    { "key": "change", "label": "5 · Change", "icon": "🔁", "detail": "Impact check, approval, release, rollback" },
+    { "key": "assets", "label": "6 · Assets", "icon": "📦", "detail": "Hardware, software, licences, CMDB records" },
+    { "key": "network", "label": "7 · Network", "icon": "🌐", "detail": "DNS, firewall, VPN, IP inventory, uptime" },
+    { "key": "backup", "label": "8 · Backup", "icon": "💾", "detail": "Backup jobs, restore tests, retention rules" },
+    { "key": "monitoring", "label": "9 · Monitoring", "icon": "📈", "detail": "Metrics, logs, alerts" },
+    { "key": "infra", "label": "10 · Infrastructure", "icon": "⚙️", "detail": "Servers, storage, virtual hosts, capacity" },
+    { "key": "secops", "label": "11 · Security Ops", "icon": "🛡️", "detail": "Triage, vuln scan, containment, evidence" },
+    { "key": "saas", "label": "12 · SaaS Apps", "icon": "☁️", "detail": "App owners, licence use, renewals" },
+    { "key": "finops", "label": "13 · FinOps", "icon": "💳", "detail": "Cost review and chargeback" },
+    { "key": "runbooks", "label": "14 · Runbooks", "icon": "📗", "detail": "Documented, repeatable procedures" },
+    { "key": "automation", "label": "15 · Automation", "icon": "⚡", "detail": "Standard tasks, self-service, job status" },
+    { "key": "aiops", "label": "16 · AIOps", "icon": "🧠", "detail": "Signal grouping over raw alert volume" },
+    {
+      "key": "aisupport",
+      "label": "17 · AI Support",
+      "icon": "🤖",
+      "detail": "Ticket summary, guardrails, feedback loop",
+      "reserved": true,
+      "tag": "emerging"
+    }
+  ],
+  "edges": [
+    { "from": "hub", "to": "basics" },
+    { "from": "hub", "to": "servicedesk" },
+    { "from": "hub", "to": "endpoint" },
+    { "from": "hub", "to": "access" },
+    { "from": "hub", "to": "change" },
+    { "from": "hub", "to": "assets" },
+    { "from": "hub", "to": "network" },
+    { "from": "hub", "to": "backup" },
+    { "from": "hub", "to": "monitoring" },
+    { "from": "hub", "to": "infra" },
+    { "from": "hub", "to": "secops" },
+    { "from": "hub", "to": "saas" },
+    { "from": "hub", "to": "finops" },
+    { "from": "hub", "to": "runbooks" },
+    { "from": "hub", "to": "automation" },
+    { "from": "hub", "to": "aiops" },
+    { "from": "hub", "to": "aisupport", "dashed": true }
+  ]
+}

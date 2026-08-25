@@ -24,5 +24,9 @@ export default defineConfig({
     // faster node environment is the right default.
     environment: 'node',
     include: ['src/**/*.test.ts'],
+    // Vitest 4 defaults to the `forks` pool, which intermittently fails to start here with
+    // "Timeout waiting for worker to respond" — a child-process spawn stall on Windows, not a
+    // test failure. Worker threads are cheaper to start and have been reliable.
+    pool: 'threads',
   },
 })
