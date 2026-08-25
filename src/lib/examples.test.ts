@@ -1,7 +1,9 @@
-// Validates the shipped example mindmaps in examples/.
+// Validates the starter-library mindmaps in public/library/.
 //
-// Two things worth guarding. First, that the files actually import — a malformed example is worse
-// than none, because it teaches the wrong schema. Second, and the reason this file exists at all:
+// These ship to users through the library panel on the mindmaps page, so a broken file is a broken
+// feature rather than a bad doc snippet. Three things worth guarding. First, that every manifest
+// entry resolves and imports. Second, that the files actually import — a malformed example is
+// worse than none, because it teaches the wrong schema. Third, and the reason this file exists:
 // that the "overview" variant is genuinely legible in a social feed while the "full" 17-stage
 // variant is measurably not.
 //
@@ -15,9 +17,10 @@ import { describe, expect, it } from 'vitest'
 import { importMindmap } from './importMindmap'
 import { layoutMindmap, type LayoutOptions } from './layout'
 
-const EXAMPLES_DIR = join(process.cwd(), 'examples')
+// Served at /library/ at run time, so these live under public/ rather than in a bundled folder.
+const LIBRARY_DIR = join(process.cwd(), 'public', 'library')
 
-const load = (file: string) => importMindmap(readFileSync(join(EXAMPLES_DIR, file), 'utf8'))
+const load = (file: string) => importMindmap(readFileSync(join(LIBRARY_DIR, file), 'utf8'))
 
 /** Mirrors what buildComposition derives for a 1:1 export with a title and a signature band. */
 const squarePreset = (): LayoutOptions => ({
@@ -36,7 +39,23 @@ const FEED_SCALE = 0.4
 /** Below roughly this, body text stops being comfortably readable on a phone or in-feed. */
 const READABLE_FLOOR_PX = 7.5
 
-describe('example mindmaps', () => {
+describe('starter library', () => {
+  it('every manifest entry points at a file that imports', () => {
+    const manifest = JSON.parse(readFileSync(join(LIBRARY_DIR, 'index.json'), 'utf8')) as {
+      mindmaps: { file: string; recommended?: boolean }[]
+    }
+
+    expect(manifest.mindmaps.length).toBeGreaterThan(0)
+    for (const entry of manifest.mindmaps) {
+      // The app fetches each entry by name at run time, so a typo here is a silent 404 in the UI.
+      expect(() => load(entry.file)).not.toThrow()
+      expect(load(entry.file).mindmap.nodes.length).toBeGreaterThan(0)
+    }
+
+    // Exactly one recommended entry, or the badge stops meaning anything.
+    expect(manifest.mindmaps.filter(m => m.recommended === true)).toHaveLength(1)
+  })
+
   it('overview imports as the authoring shape with no warnings', () => {
     const { mindmap, format, warnings } = load('it-ops-roadmap-overview.json')
 

@@ -1,7 +1,18 @@
 # Mindmap authoring schema
 
-Hand this file plus a reference image to an AI assistant and ask for a mindmap. Paste the JSON
-it returns into **Import JSON** on the mindmaps page.
+Hand this file plus a reference image to an AI assistant and ask for a mindmap. There are two ways
+to get the result into the app:
+
+- **Starter library (no copy-paste).** Save the JSON into `public/library/`, add an entry to
+  `public/library/index.json`, and refresh. It appears on the mindmaps page with a one-click
+  **Add**. This is the better route when an assistant with filesystem access is doing the work,
+  and `docker-compose.yml` bind-mounts `public/` so no rebuild is needed.
+- **Import JSON.** Paste into the textarea on the mindmaps page. Use this for a one-off, or when
+  the JSON arrives by some route other than the filesystem.
+
+The library directory is `library`, not `mindmaps`, because a `public/mindmaps/` directory would
+shadow the app's `/mindmaps` route — nginx would resolve that path to a directory with no
+`index.html` and stop serving the SPA there.
 
 ## Shape
 
@@ -77,7 +88,7 @@ being legible in-feed, and the layout compensates by scaling everything down.
 
 ## Worked examples
 
-`examples/` holds two versions of the same source infographic, which together show the sizing
+`public/library/` holds two versions of the same source infographic, which together show the sizing
 guidance above in practice:
 
 | file | nodes | title at 1200px | in-feed (40%) |

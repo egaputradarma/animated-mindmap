@@ -1,7 +1,12 @@
 {
+  // Test sources only. Mirrors tsconfig.app.json but adds Node types, because the suites read
+  // fixture files from disk. Keeping this separate is what lets the app project stay free of Node
+  // globals while tests still get typechecked by `tsc -b`.
   "compilerOptions": {
     "target": "ES2022",
     "useDefineForClassFields": true,
+    // DOM is needed even here: the modules under test include signature.ts, which references
+    // Image and document.
     "lib": ["ES2022", "DOM", "DOM.Iterable"],
     "module": "ESNext",
     "skipLibCheck": true,
@@ -16,12 +21,7 @@
     "noUnusedParameters": true,
     "noFallthroughCasesInSwitch": true,
     "noUncheckedSideEffectImports": true,
-    "types": ["vite/client"]
+    "types": ["node", "vite/client"]
   },
-  "include": ["src"],
-  // Tests are not part of the app bundle and legitimately use Node APIs (`node:fs` to read the
-  // library fixtures). Typechecking them here would either fail — this project deliberately has
-  // no Node types — or force Node globals into the browser code's type surface. They get their
-  // own project instead; see tsconfig.test.json.
-  "exclude": ["src/**/*.test.ts"]
+  "include": ["src/**/*.test.ts"]
 }

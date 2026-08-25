@@ -1,8 +1,9 @@
 import { useCallback, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Copy, FileJson, Pencil, Plus, Sparkles, Trash2 } from 'lucide-react'
+import { BookOpen, Copy, FileJson, Pencil, Plus, Sparkles, Trash2 } from 'lucide-react'
 import AppLogo from '../components/AppLogo'
 import { Banner, Button, Field, SectionHeading, TextInput } from '../components/ui'
+import { useLibrary, type LibraryEntry } from '../hooks/useLibrary'
 import { exportAuthoringJson, importMindmap, ImportError } from '../lib/importMindmap'
 import {
   createMindmap,
@@ -20,7 +21,16 @@ export default function MindmapsPage() {
   const [newName, setNewName] = useState('')
   const [importOpen, setImportOpen] = useState(false)
 
+  const library = useLibrary()
+
   const refresh = useCallback(() => setItems(listMindmaps()), [])
+
+  /** Copies a library mindmap into local storage and opens it. */
+  const addFromLibrary = (entry: LibraryEntry) => {
+    const saved = importAsNew(entry.mindmap, entry.mindmap.name)
+    refresh()
+    navigate(`/mindmaps/${saved.id}/animate`)
+  }
 
   const create = () => {
     const created = createMindmap(newName)
@@ -84,12 +94,78 @@ export default function MindmapsPage() {
         />
       )}
 
+      {library.entries.length > 0 && (
+        <section className="mb-10">
+          <div className="mb-3 flex items-baseline gap-2">
+            <SectionHeading>
+              <span className="inline-flex items-center gap-1.5">
+                <BookOpen size={13} /> Starter library
+              </span>
+            </SectionHeading>
+            <span className="text-[11px] text-slate-600">served from public/library/</span>
+          </div>
+
+          <ul className="grid grid-cols-1 gap-3 md:grid-cols-2">
+            {library.entries.map(entry => {
+              const alreadyAdded = items.some(i => i.name === entry.mindmap.name)
+              return (
+                <li
+                  key={entry.file}
+                  className="flex items-start gap-3 rounded-xl border border-ink-700 bg-ink-850/60 p-3.5"
+                >
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-2">
+                      <h3 className="truncate text-sm font-semibold text-slate-100">{entry.mindmap.name}</h3>
+                      {entry.recommended && (
+                        <span className="shrink-0 rounded bg-emerald-500/15 px-1.5 py-px text-[10px] font-medium uppercase tracking-wide text-emerald-300">
+                          Recommended
+                        </span>
+                      )}
+                    </div>
+                    <p className="mt-0.5 text-[11px] text-slate-500">
+                      {entry.mindmap.nodes.length} nodes · {entry.mindmap.edges.length} links
+                      {alreadyAdded && ' · already added'}
+                    </p>
+                    {entry.note && <p className="mt-1.5 text-[11px] leading-snug text-slate-400">{entry.note}</p>}
+                  </div>
+                  <Button
+                    variant={entry.recommended && !alreadyAdded ? 'primary' : 'outline'}
+                    onClick={() => addFromLibrary(entry)}
+                    title="Copy into your mindmaps and open the animated view"
+                  >
+                    <Plus size={13} /> Add
+                  </Button>
+                </li>
+              )
+            })}
+          </ul>
+
+          {library.problems.length > 0 && (
+            <div className="mt-3">
+              <Banner tone="warn">
+                <ul className="list-inside list-disc space-y-0.5">
+                  {library.problems.map((p, i) => (
+                    <li key={i}>{p}</li>
+                  ))}
+                </ul>
+              </Banner>
+            </div>
+          )}
+        </section>
+      )}
+
       {items.length === 0 ? (
         <div className="flex flex-col items-center gap-3 rounded-xl border border-dashed border-ink-700 p-12 text-center">
           <AppLogo size={72} className="opacity-40" />
-          <p className="text-sm text-slate-500">No mindmaps yet. Create one above, or import some JSON.</p>
+          <p className="text-sm text-slate-500">
+            {library.entries.length > 0
+              ? 'Nothing of your own yet. Add one from the library above, or create a mindmap.'
+              : 'No mindmaps yet. Create one above, or import some JSON.'}
+          </p>
         </div>
       ) : (
+        <>
+        {library.entries.length > 0 && <SectionHeading>My mindmaps</SectionHeading>}
         <ul className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
           {items.map(item => {
             const thumbnail = loadThumbnail(item.id)
@@ -139,6 +215,7 @@ export default function MindmapsPage() {
             )
           })}
         </ul>
+        </>
       )}
     </div>
   )

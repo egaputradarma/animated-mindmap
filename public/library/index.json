@@ -1,0 +1,14 @@
+{
+  "$comment": "Manifest for the in-app starter library. Drop a mindmap JSON into public/library/ and add an entry here; the app lists it on the mindmaps page with a one-click Add. Files use the authoring schema documented in docs/mindmap-schema.md.",
+  "mindmaps": [
+    {
+      "file": "it-ops-roadmap-overview.json",
+      "recommended": true,
+      "note": "Seven phases. Titles land near 9px in-feed, so this is the one to post."
+    },
+    {
+      "file": "it-ops-roadmap-full.json",
+      "note": "All seventeen stages. Titles land near 4px in-feed - use 16:9 or treat it as a poster."
+    }
+  ]
+}
