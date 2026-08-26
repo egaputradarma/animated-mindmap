@@ -42,13 +42,18 @@ import {
   DEFAULT_EDGE_WEIGHT,
   EDGE_ARROW_LABELS,
   EDGE_ARROWS,
+  EDGE_SIDE_LABELS,
+  EDGE_SIDES,
   EDGE_WEIGHT_LABELS,
   EDGE_WEIGHTS,
   edgeArrowOf,
+  edgeSourceSideOf,
+  edgeTargetSideOf,
   edgeWeightOf,
   emptyNode,
   type AccentName,
   type EdgeArrow,
+  type EdgeSide,
   type EdgeWeight,
   type Mindmap,
   type MindmapEdge,
@@ -103,10 +108,45 @@ function CardNode({ data, selected }: NodeProps<CardData>) {
 
 const NODE_TYPES = { card: CardNode }
 
-/** Weight and arrow ride along on the React Flow edge so `style` stays a derived value. */
+/** Presentation rides along on the React Flow edge so `style` stays a derived value. */
 interface EdgeData {
   weight: EdgeWeight
   arrow: EdgeArrow
+  sourceSide: EdgeSide
+  targetSide: EdgeSide
+}
+
+/** Side names map onto the four handle ids declared on every card. */
+const SIDE_TO_HANDLE: Record<Exclude<EdgeSide, 'auto'>, string> = {
+  top: 't',
+  right: 'r',
+  bottom: 'b',
+  left: 'l',
+}
+
+const HANDLE_TO_SIDE: Record<string, EdgeSide> = { t: 'top', r: 'right', b: 'bottom', l: 'left' }
+
+/**
+ * React Flow always needs a concrete handle to draw from, so `auto` has to resolve to something. It
+ * picks the pair of faces that point at each other, which is the closest the editor can get to the
+ * animation's centre-to-centre line.
+ */
+function autoHandles(
+  nodes: Node<CardData>[],
+  sourceKey: string,
+  targetKey: string,
+): { source: string; target: string } {
+  const a = nodes.find(n => n.id === sourceKey)?.position
+  const b = nodes.find(n => n.id === targetKey)?.position
+  if (!a || !b) return { source: 'r', target: 'l' }
+
+  const dx = b.x - a.x
+  const dy = b.y - a.y
+  // Whichever axis dominates decides the faces used.
+  if (Math.abs(dx) >= Math.abs(dy)) {
+    return dx >= 0 ? { source: 'r', target: 'l' } : { source: 'l', target: 'r' }
+  }
+  return dy >= 0 ? { source: 'b', target: 't' } : { source: 't', target: 'b' }
 }
 
 const EDGE_STROKE = '#64748b'
@@ -129,23 +169,36 @@ const WEIGHT_HINTS: Record<EdgeWeight, string> = {
 
 const currentWeight = (edge: Edge): EdgeWeight => ((edge.data as Partial<EdgeData>)?.weight ?? DEFAULT_EDGE_WEIGHT)
 const currentArrow = (edge: Edge): EdgeArrow => ((edge.data as Partial<EdgeData>)?.arrow ?? DEFAULT_EDGE_ARROW)
+const currentSourceSide = (edge: Edge): EdgeSide => ((edge.data as Partial<EdgeData>)?.sourceSide ?? 'auto')
+const currentTargetSide = (edge: Edge): EdgeSide => ((edge.data as Partial<EdgeData>)?.targetSide ?? 'auto')
 
 /** Human-readable node name for the connection header, falling back to the key. */
 const labelFor = (nodes: Node<CardData>[], key: string): string =>
   nodes.find(n => n.id === key)?.data.node.label ?? key
 
-/** Maps a domain edge onto the React Flow edge the canvas renders. */
-function toFlowEdge(edge: MindmapEdge): Edge {
+/**
+ * Maps a domain edge onto the React Flow edge the canvas renders.
+ *
+ * `nodes` is only needed to resolve `auto` sides to concrete handles; pass it whenever positions are
+ * known so the editor preview matches what the animation will draw.
+ */
+function toFlowEdge(edge: MindmapEdge, nodes: Node<CardData>[] = []): Edge {
   const weight = edgeWeightOf(edge)
   const arrow = edgeArrowOf(edge)
+  const sourceSide = edgeSourceSideOf(edge)
+  const targetSide = edgeTargetSideOf(edge)
   const style = FLOW_WEIGHT[weight]
+
+  const auto = autoHandles(nodes, edge.source_node_key, edge.target_node_key)
 
   return {
     id: edge.id,
     source: edge.source_node_key,
     target: edge.target_node_key,
+    sourceHandle: sourceSide === 'auto' ? auto.source : SIDE_TO_HANDLE[sourceSide],
+    targetHandle: targetSide === 'auto' ? auto.target : SIDE_TO_HANDLE[targetSide],
     label: edge.label ?? undefined,
-    data: { weight, arrow } satisfies EdgeData,
+    data: { weight, arrow, sourceSide, targetSide } satisfies EdgeData,
     // Only the flowing weights animate, mirroring the packet suppression in the animation.
     animated: weight !== 'semi',
     style: { stroke: EDGE_STROKE, strokeWidth: style.width, strokeDasharray: style.dash },
@@ -201,7 +254,13 @@ function EditorInner() {
         data: { node },
       })),
     )
-    setEdges(loaded.edges.map(toFlowEdge))
+    const flowNodes = loaded.nodes.map(node => ({
+      id: node.node_key,
+      type: 'card',
+      position: { x: node.position_x, y: node.position_y },
+      data: { node },
+    }))
+    setEdges(loaded.edges.map(edge => toFlowEdge(edge, flowNodes)))
     hydrated.current = true
   }, [id])
 
@@ -234,6 +293,8 @@ function EditorInner() {
           label: typeof e.label === 'string' && e.label ? e.label : null,
           weight: data.weight ?? DEFAULT_EDGE_WEIGHT,
           arrow: data.arrow ?? DEFAULT_EDGE_ARROW,
+          source_side: data.sourceSide ?? 'auto',
+          target_side: data.targetSide ?? 'auto',
         }
       }),
     }
@@ -279,16 +340,21 @@ function EditorInner() {
       current.map(e => {
         if (e.id !== selectedEdgeId) return e
         const data = (e.data ?? {}) as Partial<EdgeData>
-        // Rebuilt through toFlowEdge rather than patched in place, so style, markers and the
-        // animated flag cannot drift out of step with weight and arrow.
-        return toFlowEdge({
-          id: e.id,
-          source_node_key: e.source,
-          target_node_key: e.target,
-          label: patch.label !== undefined ? patch.label : typeof e.label === 'string' ? e.label : null,
-          weight: patch.weight ?? data.weight ?? DEFAULT_EDGE_WEIGHT,
-          arrow: patch.arrow ?? data.arrow ?? DEFAULT_EDGE_ARROW,
-        })
+        // Rebuilt through toFlowEdge rather than patched in place, so style, markers, handles and the
+        // animated flag cannot drift out of step with the underlying values.
+        return toFlowEdge(
+          {
+            id: e.id,
+            source_node_key: e.source,
+            target_node_key: e.target,
+            label: patch.label !== undefined ? patch.label : typeof e.label === 'string' ? e.label : null,
+            weight: patch.weight ?? data.weight ?? DEFAULT_EDGE_WEIGHT,
+            arrow: patch.arrow ?? data.arrow ?? DEFAULT_EDGE_ARROW,
+            source_side: patch.sourceSide ?? data.sourceSide ?? 'auto',
+            target_side: patch.targetSide ?? data.targetSide ?? 'auto',
+          },
+          nodes,
+        )
       }),
     )
   }
@@ -306,14 +372,20 @@ function EditorInner() {
       current.map(e => {
         if (e.id !== selectedEdgeId) return e
         const data = (e.data ?? {}) as Partial<EdgeData>
-        return toFlowEdge({
-          id: e.id,
-          source_node_key: e.target,
-          target_node_key: e.source,
-          label: typeof e.label === 'string' ? e.label : null,
-          weight: data.weight ?? DEFAULT_EDGE_WEIGHT,
-          arrow: data.arrow ?? DEFAULT_EDGE_ARROW,
-        })
+        return toFlowEdge(
+          {
+            id: e.id,
+            source_node_key: e.target,
+            target_node_key: e.source,
+            label: typeof e.label === 'string' ? e.label : null,
+            weight: data.weight ?? DEFAULT_EDGE_WEIGHT,
+            arrow: data.arrow ?? DEFAULT_EDGE_ARROW,
+            // Sides swap with the ends, or reversing would move where the line attaches.
+            source_side: data.targetSide ?? 'auto',
+            target_side: data.sourceSide ?? 'auto',
+          },
+          nodes,
+        )
       }),
     )
   }
@@ -339,14 +411,17 @@ function EditorInner() {
 
     // Wire it to the selection immediately — an orphan node contributes nothing to the layout.
     if (selectedId) {
-      const created = toFlowEdge({
-        id: uid('e'),
-        source_node_key: selectedId,
-        target_node_key: key,
-        label: null,
-        weight: DEFAULT_EDGE_WEIGHT,
-        arrow: DEFAULT_EDGE_ARROW,
-      })
+      const created = toFlowEdge(
+        {
+          id: uid('e'),
+          source_node_key: selectedId,
+          target_node_key: key,
+          label: null,
+          weight: DEFAULT_EDGE_WEIGHT,
+          arrow: DEFAULT_EDGE_ARROW,
+        },
+        nodes,
+      )
       setEdges(current => [...current, created])
     }
     setSelected({ kind: 'node', id: key })
@@ -441,14 +516,22 @@ function EditorInner() {
           onEdgesChange={(changes: EdgeChange[]) => setEdges(current => applyEdgeChanges(changes, current))}
           onConnect={(connection: Connection) => {
             if (!connection.source || !connection.target) return
-            const created = toFlowEdge({
-              id: uid('e'),
-              source_node_key: connection.source,
-              target_node_key: connection.target,
-              label: null,
-              weight: DEFAULT_EDGE_WEIGHT,
-              arrow: DEFAULT_EDGE_ARROW,
-            })
+            // The handles dragged between are recorded as explicit sides. Dragging from a specific dot
+            // is a clear statement of intent, and discarding it would snap the line somewhere else the
+            // moment it was drawn.
+            const created = toFlowEdge(
+              {
+                id: uid('e'),
+                source_node_key: connection.source,
+                target_node_key: connection.target,
+                label: null,
+                weight: DEFAULT_EDGE_WEIGHT,
+                arrow: DEFAULT_EDGE_ARROW,
+                source_side: HANDLE_TO_SIDE[connection.sourceHandle ?? ''] ?? 'auto',
+                target_side: HANDLE_TO_SIDE[connection.targetHandle ?? ''] ?? 'auto',
+              },
+              nodes,
+            )
             // addEdge still runs so React Flow's own duplicate-connection guard applies.
             setEdges(current => addEdge(created, current))
           }}
@@ -561,6 +644,29 @@ function EditorInner() {
                 options={EDGE_ARROWS.map(a => ({ value: a, label: EDGE_ARROW_LABELS[a] }))}
               />
             </Field>
+
+            <div className="grid grid-cols-2 gap-2">
+              <Field label="Leaves from">
+                <Select<EdgeSide>
+                  value={currentSourceSide(selectedEdge)}
+                  onChange={v => patchSelectedEdge({ sourceSide: v })}
+                  options={EDGE_SIDES.map(s => ({ value: s, label: EDGE_SIDE_LABELS[s] }))}
+                  ariaLabel="Side the connection leaves from"
+                />
+              </Field>
+              <Field label="Arrives at">
+                <Select<EdgeSide>
+                  value={currentTargetSide(selectedEdge)}
+                  onChange={v => patchSelectedEdge({ targetSide: v })}
+                  options={EDGE_SIDES.map(s => ({ value: s, label: EDGE_SIDE_LABELS[s] }))}
+                  ariaLabel="Side the connection arrives at"
+                />
+              </Field>
+            </div>
+            <p className="text-[11px] leading-snug text-slate-500">
+              Auto runs the line centre to centre and clips it at the card edge. Naming a side makes the
+              line leave perpendicular to that face. You can also just drag between the dots on each card.
+            </p>
 
             <Field label="Label" hint="Optional chip drawn mid-line.">
               <TextInput

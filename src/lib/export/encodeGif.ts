@@ -14,14 +14,27 @@
 // plays at 33.3fps — the loop still closes cleanly, it just runs ~11% fast. Any fps dividing
 // 100 (20, 25, 50) avoids the drift entirely, hence the default of 25.
 
-import { applyPalette, GIFEncoder, quantize } from 'gifenc'
+import { GIFEncoder, quantize } from 'gifenc'
 import type { Composition } from '../composition'
+import { mapToPalette, type DitherMode } from './dither'
 import { createFrameCanvas, frameCount, shouldYield, yieldToBrowser, type EncodeSettings, type ProgressFn } from './frames'
 
 /** Frames sampled to build the global palette. Spread across the loop, not clustered at the start. */
 const PALETTE_SAMPLES = 10
 /** gifenc's fastest quantiser format that still handles gradients acceptably. */
 const PALETTE_FORMAT = 'rgb565'
+
+export interface GifOptions {
+  /**
+   * `floyd-steinberg` diffuses quantisation error, which is what keeps the background gradient and
+   * the packet glows from banding. Costs roughly 2-3x the encode time; see dither.ts.
+   */
+  dither: DitherMode
+  /** 0..1. Scales the diffused error, trading banding against visible noise. */
+  ditherStrength: number
+}
+
+export const DEFAULT_GIF_OPTIONS: GifOptions = { dither: 'floyd-steinberg', ditherStrength: 0.9 }
 
 export interface GifResult {
   blob: Blob
@@ -36,6 +49,7 @@ export async function encodeGif(
   composition: Composition,
   settings: EncodeSettings,
   onProgress?: ProgressFn,
+  options: GifOptions = DEFAULT_GIF_OPTIONS,
 ): Promise<GifResult> {
   const total = frameCount(settings)
   const frame = createFrameCanvas(composition, settings.maxSide)
@@ -70,17 +84,21 @@ export async function encodeGif(
   const delayCentiseconds = Math.max(2, Math.round(100 / settings.fps))
   const delayMs = delayCentiseconds * 10
 
+  const label = options.dither === 'none' ? 'Encoding GIF' : 'Encoding GIF (dithered)'
+
   for (let i = 0; i < total; i++) {
     frame.drawAt(i / total)
     const { data } = frame.ctx.getImageData(0, 0, width, height)
-    const indexed = applyPalette(data, palette, PALETTE_FORMAT)
+    // Replaces gifenc's `applyPalette`, which has no dithering. Same palette, same nearest-colour
+    // metric — the difference is that the quantisation error is diffused rather than discarded.
+    const indexed = mapToPalette(data, width, height, palette, options.dither, options.ditherStrength)
 
     // Only the first frame carries the palette; gifenc then writes it as the global colour
     // table and later frames reference it. Repeating it per frame would add a local table to
     // every single frame for no visual gain.
     gif.writeFrame(indexed, width, height, i === 0 ? { palette, delay: delayMs } : { delay: delayMs })
 
-    onProgress?.({ value: (i + 1) / total, label: `Encoding GIF · frame ${i + 1}/${total}` })
+    onProgress?.({ value: (i + 1) / total, label: `${label} · frame ${i + 1}/${total}` })
     if (shouldYield(i)) await yieldToBrowser()
   }
 

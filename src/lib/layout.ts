@@ -11,9 +11,10 @@
 // graph fills rather than the pixel dimensions.
 
 import {
-  arcBetween,
+  curveBetweenAnchors,
   fractionOutside,
   measure as measureCurve,
+  type Anchor,
   type CurveGeometry,
   type Point,
   type Rect,
@@ -23,9 +24,12 @@ import { estimator, wrapText } from './text'
 import {
   ACCENT_NAMES,
   edgeArrowOf,
+  edgeSourceSideOf,
+  edgeTargetSideOf,
   edgeWeightOf,
   type AccentName,
   type EdgeArrow,
+  type EdgeSide,
   type EdgeWeight,
   type Mindmap,
   type MindmapEdge,
@@ -38,12 +42,44 @@ import {
  */
 function cardRect(node: PlacedNode | undefined): Rect | null {
   if (!node) return null
-  const pad = Math.max(2, node.w * 0.03)
+  const pad = cardPad(node)
   return {
     x: node.x - node.w / 2 - pad,
     y: node.y - node.h / 2 - pad,
     width: node.w + pad * 2,
     height: node.h + pad * 2,
+  }
+}
+
+const cardPad = (node: PlacedNode): number => Math.max(2, node.w * 0.03)
+
+/** Outward unit normal of each card face. */
+const SIDE_NORMALS: Record<Exclude<EdgeSide, 'auto'>, Point> = {
+  top: { x: 0, y: -1 },
+  right: { x: 1, y: 0 },
+  bottom: { x: 0, y: 1 },
+  left: { x: -1, y: 0 },
+}
+
+/**
+ * Where a connection attaches to a card, and which way it leaves.
+ *
+ * For `auto` the anchor is the card centre with no departure direction — the line runs centre-to-
+ * centre and gets clipped where it emerges, which is what suits a radial layout. For a named side the
+ * anchor sits on the midpoint of that face, nudged just outside by the same padding the trim uses, so
+ * the line visibly touches the card rather than disappearing under its border.
+ */
+function anchorFor(node: PlacedNode | undefined, centre: Point, side: EdgeSide): Anchor {
+  if (!node || side === 'auto') return { point: centre, normal: null }
+
+  const normal = SIDE_NORMALS[side]
+  const pad = cardPad(node)
+  // Half-extent along the normal: width for the vertical faces, height for the horizontal ones.
+  const reach = normal.x !== 0 ? node.w / 2 + pad : node.h / 2 + pad
+
+  return {
+    point: { x: centre.x + normal.x * reach, y: centre.y + normal.y * reach },
+    normal,
   }
 }
 
@@ -101,6 +137,11 @@ export interface PlacedNode {
   order: number
   accent: AccentName
   isHub: boolean
+  /**
+   * Key of the depth-1 ancestor this node hangs from, or null for the hub itself. Groups a subtree
+   * so the camera can frame one branch at a time.
+   */
+  branch: string | null
   text: CardText
   fonts: { title: number; detail: number; icon: number; tag: number }
 }
@@ -113,6 +154,9 @@ export interface PlacedEdge {
   accent: AccentName
   weight: EdgeWeight
   arrow: EdgeArrow
+  /** Resolved attachment sides. `auto` means the line ran centre-to-centre and was clipped. */
+  sourceSide: EdgeSide
+  targetSide: EdgeSide
   /** Fraction at which the curve clears the source card. Arrowheads and packets start here. */
   startTrim: number
   /** Fraction at which the curve reaches the target card. Arrowheads and packets end here. */
@@ -154,7 +198,7 @@ interface AbstractNode {
 export function layoutMindmap(mindmap: Mindmap, options: LayoutOptions): Layout {
   const graph = buildGraph(mindmap)
   const order = revealOrder(graph)
-  const accents = assignAccents(graph)
+  const { accents, branches } = assignAccents(graph)
 
   const abstract = mindmap.nodes.map(node => {
     const isHub = node.node_key === graph.hub
@@ -179,7 +223,7 @@ export function layoutMindmap(mindmap: Mindmap, options: LayoutOptions): Layout 
   if (options.mode === 'manual') placeManual(abstract, mindmap.nodes)
   else placeRadial(abstract, byKey, graph, options.spread)
 
-  return fitToCanvas(abstract, byKey, mindmap.edges, accents, options, order)
+  return fitToCanvas(abstract, byKey, mindmap.edges, accents, branches, options, order)
 }
 
 /**
@@ -187,8 +231,9 @@ export function layoutMindmap(mindmap: Mindmap, options: LayoutOptions): Layout 
  * a branch reads as one colour and the hub's spokes are all distinct — the same convention
  * the reference diagram uses. An explicit `accent` on a node always overrides this.
  */
-function assignAccents(graph: GraphView): Map<string, AccentName> {
-  const result = new Map<string, AccentName>()
+function assignAccents(graph: GraphView): { accents: Map<string, AccentName>; branches: Map<string, string | null> } {
+  const accents = new Map<string, AccentName>()
+  const branches = new Map<string, string | null>()
 
   // Palette order is fixed, so the same mindmap always colours identically.
   const branchAccent = new Map<string, AccentName>()
@@ -206,19 +251,22 @@ function assignAccents(graph: GraphView): Map<string, AccentName> {
   }
 
   for (const node of graph.nodes) {
+    const isHub = node.node_key === graph.hub
+    const root = isHub ? null : branchRootOf(node.node_key)
+    branches.set(node.node_key, root)
+
     if (node.accent) {
-      result.set(node.node_key, node.accent)
+      accents.set(node.node_key, node.accent)
       continue
     }
-    if (node.node_key === graph.hub) {
-      result.set(node.node_key, 'blue')
+    if (isHub) {
+      accents.set(node.node_key, 'blue')
       continue
     }
-    const root = branchRootOf(node.node_key)
-    result.set(node.node_key, (root !== null ? branchAccent.get(root) : undefined) ?? 'slate')
+    accents.set(node.node_key, (root !== null ? branchAccent.get(root) : undefined) ?? 'slate')
   }
 
-  return result
+  return { accents, branches }
 }
 
 function measureCardText(node: MindmapNode, cardWidth: number): CardText {
@@ -365,6 +413,7 @@ function fitToCanvas(
   byKey: Map<string, AbstractNode>,
   edges: MindmapEdge[],
   accents: Map<string, AccentName>,
+  branches: Map<string, string | null>,
   options: LayoutOptions,
   order: Map<string, number>,
 ): Layout {
@@ -412,6 +461,7 @@ function fitToCanvas(
       order: n.order,
       accent: n.accent,
       isHub: n.isHub,
+      branch: branches.get(n.key) ?? null,
       text: n.text,
       fonts: {
         title: w * TITLE_RATIO,
@@ -430,19 +480,25 @@ function fitToCanvas(
     const b = byKey.get(edge.target_node_key)
     if (!a || !b) continue
 
-    const from = toCanvas(a)
-    const to = toCanvas(b)
-    const geom = measureCurve(arcBetween(from, to, options.curvature))
+    const sourceSide = edgeSourceSideOf(edge)
+    const targetSide = edgeTargetSideOf(edge)
+
+    const sourceAnchor = anchorFor(placedById.get(a.key), toCanvas(a), sourceSide)
+    const targetAnchor = anchorFor(placedById.get(b.key), toCanvas(b), targetSide)
+    const geom = measureCurve(curveBetweenAnchors(sourceAnchor, targetAnchor, options.curvature))
 
     // Trims are resolved once here rather than per frame: the geometry is fixed for the life of a
     // layout, and the sampling below is far too costly to repeat 300 times during an export.
     // Searched across the whole curve rather than just the near half. A card's half-height can be
     // most of the distance to a vertically-adjacent neighbour, so the exit point legitimately sits
     // past the midpoint and a narrower window would miss it.
-    const sourceRect = cardRect(placedById.get(a.key))
-    const targetRect = cardRect(placedById.get(b.key))
-    let startTrim = sourceRect ? fractionOutside(geom, sourceRect, 0, 1) : 0.07
-    let endTrim = targetRect ? fractionOutside(geom, targetRect, 1, 0) : 0.93
+    //
+    // A named side needs no trim at that end: the anchor already sits just outside the card face, so
+    // the whole curve is visible and sampling for a crossing would only find the far card.
+    const sourceRect = sourceSide === 'auto' ? cardRect(placedById.get(a.key)) : null
+    const targetRect = targetSide === 'auto' ? cardRect(placedById.get(b.key)) : null
+    let startTrim = sourceRect ? fractionOutside(geom, sourceRect, 0, 1) : 0
+    let endTrim = targetRect ? fractionOutside(geom, targetRect, 1, 0) : 1
 
     if (startTrim >= endTrim) {
       // The two cards cover the entire curve between them, which happens when they overlap or sit
@@ -462,6 +518,8 @@ function fitToCanvas(
       accent: (a.depth >= b.depth ? accents.get(a.key) : accents.get(b.key)) ?? 'slate',
       weight: edgeWeightOf(edge),
       arrow: edgeArrowOf(edge),
+      sourceSide,
+      targetSide,
       startTrim,
       endTrim,
       inert: a.node.reserved === true || b.node.reserved === true,

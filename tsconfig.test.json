@@ -23,5 +23,9 @@
     "noUncheckedSideEffectImports": true,
     "types": ["node", "vite/client"]
   },
-  "include": ["src/**/*.test.ts"]
+  // Ambient declarations are needed here too. Tests pull in the modules they exercise, so a suite
+  // touching the GIF encoder needs the hand-written `gifenc` types from src/types — that package
+  // ships no declarations of its own. Without this the app project compiles and the test project
+  // does not, which vitest would never reveal because it transpiles rather than typechecks.
+  "include": ["src/**/*.test.ts", "src/types/*.d.ts"]
 }

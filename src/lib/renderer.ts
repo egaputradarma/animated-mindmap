@@ -24,6 +24,7 @@
 // The cost is that the reference's CSS had to be hand-ported, which is what this file is.
 
 import { pointAtFraction, tangentAtFraction } from './bezier'
+import { applyCamera, cameraAt, type CameraStop } from './camera'
 import type { Layout, PlacedEdge, PlacedNode } from './layout'
 import { accentColour, mix, rgba, type Rgb, type Theme } from './palette'
 import type { EdgeWeight } from '../types/mindmap'
@@ -67,6 +68,8 @@ export interface RenderOptions {
   titleBlock: TitleBlock | null
   /** Vertical band at the top the title block draws into, in px. */
   titleSpace: number
+  /** Null keeps the view fixed on the whole graph. Otherwise the camera tours these stops. */
+  cameraStops: CameraStop[] | null
 }
 
 export function drawFrame(ctx: CanvasRenderingContext2D, layout: Layout, options: RenderOptions, t: number): void {
@@ -81,8 +84,13 @@ export function drawFrame(ctx: CanvasRenderingContext2D, layout: Layout, options
   ctx.save()
   ctx.globalAlpha = frame.global
 
-  if (options.titleBlock) {
-    drawTitleBlock(ctx, layout, options.titleBlock, theme, options.titleSpace, frame.title)
+  // ── Graph, under the camera ──
+  // The camera wraps only the graph. Title and signature are overlays that must stay pinned to the
+  // frame: if they moved with the camera they would slide off during a pan, and the signature's
+  // carefully measured inset from the canvas edge would become meaningless.
+  ctx.save()
+  if (options.cameraStops) {
+    applyCamera(ctx, cameraAt(options.cameraStops, t), layout.width, layout.height)
   }
 
   // Painter's order matches the reference's z-index: wires beneath, cards on top. Packets sit
@@ -92,6 +100,12 @@ export function drawFrame(ctx: CanvasRenderingContext2D, layout: Layout, options
   for (const edge of layout.edges) drawArrows(ctx, edge, layout, theme, t, options.timeline)
   for (const edge of layout.edges) drawPacket(ctx, edge, layout, theme, t, options.timeline)
   for (const node of layout.nodes) drawCard(ctx, node, layout, theme, t, options.timeline, frame.hubPulse)
+  ctx.restore()
+
+  // ── Overlays, in screen space ──
+  if (options.titleBlock) {
+    drawTitleBlock(ctx, layout, options.titleBlock, theme, options.titleSpace, frame.title)
+  }
 
   ctx.restore()
 }

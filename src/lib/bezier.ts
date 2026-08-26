@@ -138,6 +138,58 @@ const containsPoint = (rect: Rect, p: Point): boolean =>
   p.x >= rect.x && p.x <= rect.x + rect.width && p.y >= rect.y && p.y <= rect.y + rect.height
 
 /**
+ * One end of a connection: where it attaches, and which way it should leave.
+ *
+ * A null `normal` means "no opinion" — the curve is then shaped from the straight line between the
+ * two ends, which is the radial-layout default. A non-null normal is the outward direction of a
+ * named card face, and the curve is made to depart along it.
+ */
+export interface Anchor {
+  point: Point
+  normal: Point | null
+}
+
+/**
+ * Curve between two anchors.
+ *
+ * With no normals this is exactly `arcBetween`: a consistent one-sided bow, which is what gives the
+ * reference diagram its pinwheel look.
+ *
+ * With a normal, that end's control point is pushed straight out along the card face instead. This
+ * is what makes a connection leaving the right edge actually head right before turning, rather than
+ * cutting diagonally back across its own card. Mixed ends work too — the named end departs along
+ * its face while the other is still shaped from the line.
+ */
+export function curveBetweenAnchors(a: Anchor, b: Anchor, curvature: number): Cubic {
+  if (!a.normal && !b.normal) return arcBetween(a.point, b.point, curvature)
+
+  const dx = b.point.x - a.point.x
+  const dy = b.point.y - a.point.y
+  const span = Math.hypot(dx, dy)
+  if (span === 0) return { p0: a.point, c1: a.point, c2: b.point, p1: b.point }
+
+  // Control arm length, scaled by span so short links stay tight and long ones sweep. The floor
+  // matters: without it a very short link's departure direction is invisible and the curve reads as
+  // a straight diagonal.
+  const arm = Math.max(span * 0.42, 28)
+
+  // Used for whichever end has no named side, so it keeps its previous shape.
+  const bow = curvature * span
+  const nx = dy / span
+  const ny = -dx / span
+
+  const c1 = a.normal
+    ? { x: a.point.x + a.normal.x * arm, y: a.point.y + a.normal.y * arm }
+    : { x: a.point.x + dx / 3 + nx * bow, y: a.point.y + dy / 3 + ny * bow }
+
+  const c2 = b.normal
+    ? { x: b.point.x + b.normal.x * arm, y: b.point.y + b.normal.y * arm }
+    : { x: b.point.x - dx / 3 + nx * bow, y: b.point.y - dy / 3 + ny * bow }
+
+  return { p0: a.point, c1, c2, p1: b.point }
+}
+
+/**
  * A cubic bowing consistently to one side of the straight line A→B. Offsetting both control
  * points on the same side by a fraction of the span gives every spoke the same handedness,
  * which is what produces the pinwheel look of the reference diagram instead of a mess of

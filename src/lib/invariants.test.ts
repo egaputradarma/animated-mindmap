@@ -378,6 +378,156 @@ describe('connections', () => {
 const insideCard = (p: { x: number; y: number }, node: { x: number; y: number; w: number; h: number }): boolean =>
   p.x > node.x - node.w / 2 && p.x < node.x + node.w / 2 && p.y > node.y - node.h / 2 && p.y < node.y + node.h / 2
 
+// ── Attachment sides ──
+//
+// With `auto` the line runs centre-to-centre and is clipped where it emerges, which suits a radial
+// layout. Naming a side pins the line to the midpoint of that face and makes it depart perpendicular.
+// These check the anchor really lands on the named face, and that the curve leaves in the right
+// direction rather than cutting back across its own card.
+
+describe('connection sides', () => {
+  /** Two cards side by side, so every face is unambiguous. */
+  const pair = (sourceSide: string, targetSide: string): Mindmap => ({
+    id: 'p',
+    name: 'Pair',
+    description: null,
+    nodes: [
+      { node_key: 'a', label: 'Alpha', position_x: -200, position_y: 0, hero: true },
+      { node_key: 'b', label: 'Beta', position_x: 200, position_y: 0 },
+    ],
+    edges: [
+      {
+        id: 'e',
+        source_node_key: 'a',
+        target_node_key: 'b',
+        source_side: sourceSide as never,
+        target_side: targetSide as never,
+      },
+    ],
+    updated_at: new Date().toISOString(),
+  })
+
+  const edgeOf = (map: Mindmap) => {
+    const layout = layoutMindmap(map, layoutOptions({ mode: 'manual' }))
+    return { layout, edge: layout.edges[0], nodes: layout.nodes }
+  }
+
+  it('defaults both ends to auto', () => {
+    const edge = layoutMindmap(fixture(), layoutOptions()).edges[0]
+    expect(edge.sourceSide).toBe('auto')
+    expect(edge.targetSide).toBe('auto')
+  })
+
+  it('anchors on the named face, not the card centre', () => {
+    const { edge, nodes } = edgeOf(pair('right', 'left'))
+    const a = nodes.find(n => n.key === 'a')!
+    const b = nodes.find(n => n.key === 'b')!
+
+    // Right face of A: x at its right edge, y level with its centre.
+    expect(edge.geom.p0.x).toBeGreaterThan(a.x + a.w / 2 - 1)
+    expect(edge.geom.p0.y).toBeCloseTo(a.y, 3)
+
+    // Left face of B.
+    expect(edge.geom.p1.x).toBeLessThan(b.x - b.w / 2 + 1)
+    expect(edge.geom.p1.y).toBeCloseTo(b.y, 3)
+  })
+
+  it('anchors top and bottom faces on the vertical axis', () => {
+    const { edge, nodes } = edgeOf(pair('top', 'bottom'))
+    const a = nodes.find(n => n.key === 'a')!
+    const b = nodes.find(n => n.key === 'b')!
+
+    expect(edge.geom.p0.x).toBeCloseTo(a.x, 3)
+    expect(edge.geom.p0.y).toBeLessThan(a.y - a.h / 2 + 1)
+    expect(edge.geom.p1.x).toBeCloseTo(b.x, 3)
+    expect(edge.geom.p1.y).toBeGreaterThan(b.y + b.h / 2 - 1)
+  })
+
+  it('leaves perpendicular to the named face', () => {
+    const { edge } = edgeOf(pair('top', 'bottom'))
+
+    // Departure direction at the very start of the curve. Leaving the top face must head upward
+    // (negative y), not straight at the target.
+    const heading = tangentAtFraction(edge.geom, 0)
+    expect(heading.y).toBeLessThan(-0.5)
+
+    // Arriving at B's bottom face, the curve approaches from below, so it is still travelling up.
+    const arriving = tangentAtFraction(edge.geom, 1)
+    expect(arriving.y).toBeLessThan(0)
+  })
+
+  it('skips trimming at a named end, since the anchor is already outside the card', () => {
+    const { edge } = edgeOf(pair('right', 'left'))
+    expect(edge.startTrim).toBe(0)
+    expect(edge.endTrim).toBe(1)
+  })
+
+  it('still trims the auto end when only one side is named', () => {
+    const { edge, nodes } = edgeOf(pair('right', 'auto'))
+
+    expect(edge.startTrim).toBe(0)
+    // The target end has no named face, so it is clipped at the card boundary as before.
+    expect(edge.endTrim).toBeLessThan(1)
+
+    const b = nodes.find(n => n.key === 'b')!
+    expect(insideCard(pointAtFraction(edge.geom, edge.endTrim), b)).toBe(false)
+  })
+
+  it('keeps arrowheads and packets on the visible stretch for every side pairing', () => {
+    for (const source of ['auto', 'top', 'right', 'bottom', 'left']) {
+      for (const target of ['auto', 'top', 'right', 'bottom', 'left']) {
+        const { edge } = edgeOf(pair(source, target))
+        expect(edge.startTrim).toBeGreaterThanOrEqual(0)
+        expect(edge.endTrim).toBeLessThanOrEqual(1)
+        expect(edge.startTrim).toBeLessThan(edge.endTrim)
+      }
+    }
+  })
+
+  it('reads sides from a React Flow dump handle id', () => {
+    const { mindmap } = importMindmap(
+      JSON.stringify({
+        name: 'Flow dump',
+        nodes: [
+          { id: 'a', data: { label: 'A' }, position: { x: 0, y: 0 } },
+          { id: 'b', data: { label: 'B' }, position: { x: 200, y: 0 } },
+        ],
+        edges: [{ id: 'e', source: 'a', target: 'b', sourceHandle: 'r', targetHandle: 'l' }],
+      }),
+    )
+
+    // `r`/`l` are the handle ids the editor declares; a dump carries those rather than side names.
+    expect(mindmap.edges[0].source_side).toBe('right')
+    expect(mindmap.edges[0].target_side).toBe('left')
+  })
+
+  it('round-trips sides through the authoring export', () => {
+    const { mindmap } = importMindmap(
+      JSON.stringify({
+        name: 'Sides',
+        nodes: [{ key: 'a', label: 'A', hero: true }, { key: 'b', label: 'B' }],
+        edges: [{ from: 'a', to: 'b', source_side: 'bottom', target_side: 'top' }],
+      }),
+    )
+
+    const again = importMindmap(exportAuthoringJson(mindmap)).mindmap
+    expect(again.edges[0].source_side).toBe('bottom')
+    expect(again.edges[0].target_side).toBe('top')
+  })
+
+  it('ignores an unrecognised side rather than storing it', () => {
+    const { mindmap } = importMindmap(
+      JSON.stringify({
+        name: 'Bad side',
+        nodes: [{ key: 'a', label: 'A' }, { key: 'b', label: 'B' }],
+        edges: [{ from: 'a', to: 'b', source_side: 'diagonal' }],
+      }),
+    )
+
+    expect(mindmap.edges[0].source_side).toBe('auto')
+  })
+})
+
 // ── Signature containment ──
 //
 // The claim from the original request: "ensure proper offset from sides". This sweeps the whole

@@ -4,10 +4,11 @@ import { ArrowLeft, Download, Image as ImageIcon, Pause, Play, Upload } from 'lu
 import AppLogo from '../components/AppLogo'
 import PreviewCanvas from '../components/PreviewCanvas'
 import { Banner, Button, Field, SectionHeading, SegmentedControl, Select, Slider, TextInput, Toggle } from '../components/ui'
+import type { CameraMode } from '../lib/camera'
 import { buildComposition, DEFAULT_SPEC, SIZE_PRESETS, type CompositionSpec, type PresetName } from '../lib/composition'
+import { isMp4Supported } from '../lib/export/capabilities'
+import type { DitherMode } from '../lib/export/dither'
 import { downloadBlob, formatBytes, LINKEDIN_GIF_LIMIT_BYTES } from '../lib/export/download'
-import { encodeGif } from '../lib/export/encodeGif'
-import { encodeMp4, isMp4Supported } from '../lib/export/encodeMp4'
 import { encodePng, renderThumbnail } from '../lib/export/encodePng'
 import type { EncodeProgress } from '../lib/export/frames'
 import { slugify } from '../lib/id'
@@ -59,6 +60,9 @@ export default function AnimatePage() {
   })
   const [format, setFormat] = useState<Format>('gif')
   const [exportSettings, setExportSettings] = useState<ExportSettings>(FORMAT_DEFAULTS.gif)
+  // Smooth by default: banding on the gradient background is the most visible flaw in a GIF export,
+  // and the extra encode time is a few seconds at the default resolution.
+  const [gifDither, setGifDither] = useState<DitherMode>('floyd-steinberg')
 
   const [playing, setPlaying] = useState(true)
   const [scrubTime, setScrubTime] = useState<number | null>(null)
@@ -157,7 +161,13 @@ export default function AnimatePage() {
           note: null,
         })
       } else if (format === 'gif') {
-        const gif = await encodeGif(composition, exportSettings, setProgress)
+        // Loaded on demand. The GIF and MP4 encoders together are a large share of the bundle
+        // (Mediabunny, and gifski's wasm payload), and neither is needed to browse or preview.
+        const { encodeGif, DEFAULT_GIF_OPTIONS } = await import('../lib/export/encodeGif')
+        const gif = await encodeGif(composition, exportSettings, setProgress, {
+          ...DEFAULT_GIF_OPTIONS,
+          dither: gifDither,
+        })
         downloadBlob(gif.blob, `${base}.gif`)
         setResult({
           format,
@@ -171,6 +181,7 @@ export default function AnimatePage() {
               : null,
         })
       } else {
+        const { encodeMp4 } = await import('../lib/export/encodeMp4')
         const mp4 = await encodeMp4(composition, exportSettings, setProgress)
         downloadBlob(mp4.blob, `${base}.mp4`)
         setResult({
@@ -179,7 +190,9 @@ export default function AnimatePage() {
           bytes: mp4.blob.size,
           width: mp4.width,
           height: mp4.height,
-          note: 'Posts as a video, so it gets a play button and video analytics rather than inline image autoplay.',
+          note: mp4.unusualCodec
+            ? `Encoded as ${mp4.codec.toUpperCase()} because H.264 was unavailable here. Some platforms will not play that — check before posting.`
+            : 'Posts as a video, so it gets a play button and video analytics rather than inline image autoplay.',
         })
       }
     } catch (err) {
@@ -211,6 +224,8 @@ export default function AnimatePage() {
   const preset = SIZE_PRESETS[spec.preset]
   const busy = progress !== null
   const mp4Available = isMp4Supported()
+  // Number of camera stops a tour would have: the establishing wide shot plus one per branch.
+  const branchCount = new Set(composition.layout.nodes.map(n => n.branch).filter(Boolean)).size + 1
 
   return (
     <div className="flex h-full flex-col">
@@ -293,10 +308,29 @@ export default function AnimatePage() {
               />
 
               {format === 'gif' && (
-                <Banner tone="info">
-                  Autoplays inline as an image — no play button. Capped at 256 colours, so keep the
-                  resolution modest to stay under LinkedIn&apos;s ~8&nbsp;MB limit.
-                </Banner>
+                <>
+                  <Banner tone="info">
+                    Autoplays inline as an image — no play button. Capped at 256 colours, so keep the
+                    resolution modest to stay under LinkedIn&apos;s ~8&nbsp;MB limit.
+                  </Banner>
+                  <Field
+                    label="Colour handling"
+                    hint={
+                      gifDither === 'none'
+                        ? 'Fastest. The background gradient will show visible bands.'
+                        : 'Diffuses the 256-colour error so the gradient and glows stay smooth. Slower to encode.'
+                    }
+                  >
+                    <SegmentedControl<DitherMode>
+                      value={gifDither}
+                      onChange={setGifDither}
+                      options={[
+                        { value: 'floyd-steinberg', label: 'Smooth' },
+                        { value: 'none', label: 'Fast' },
+                      ]}
+                    />
+                  </Field>
+                </>
               )}
               {format === 'mp4' && !mp4Available && (
                 <Banner tone="warn">
@@ -501,6 +535,29 @@ export default function AnimatePage() {
                   ariaLabel="Packet traversals per loop"
                 />
               </Field>
+              <Field
+                label="Camera"
+                hint={
+                  spec.cameraMode === 'tour'
+                    ? `Establishing shot, then moves in on each branch. ${branchCount} stops — pairs well with a longer loop.`
+                    : 'Fixed view with the whole map in frame.'
+                }
+              >
+                <SegmentedControl<CameraMode>
+                  value={spec.cameraMode}
+                  onChange={v => update('cameraMode', v)}
+                  options={[
+                    { value: 'fit', label: 'Fixed' },
+                    { value: 'tour', label: 'Tour branches' },
+                  ]}
+                />
+              </Field>
+              {spec.cameraMode === 'tour' && branchCount <= 1 && (
+                <Banner tone="warn">
+                  This mindmap has no branches to tour, so the camera will stay put. Add nodes under the hub
+                  first.
+                </Banner>
+              )}
             </div>
           </section>
 

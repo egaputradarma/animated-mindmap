@@ -8,6 +8,7 @@
 // measurement and text wrapping all happen in the build, not per frame, which is what keeps
 // a 300-frame encode from re-laying-out the graph 300 times.
 
+import { buildCameraStops, type CameraMode } from './camera'
 import { layoutMindmap, type Layout, type LayoutMode } from './layout'
 import { THEMES, type ThemeName } from './palette'
 import { drawFrame, type RenderOptions } from './renderer'
@@ -56,6 +57,8 @@ export interface CompositionSpec {
   loopMode: LoopMode
   /** Packet traversals per loop. Rounded to an integer — see timeline.ts on why. */
   packetCycles: number
+  /** `tour` moves the camera branch to branch, which is what makes a dense mindmap legible. */
+  cameraMode: CameraMode
   showTitle: boolean
   /** Falls back to the mindmap name when blank. */
   title: string
@@ -71,6 +74,9 @@ export const DEFAULT_SPEC: Omit<CompositionSpec, 'mindmap' | 'signature'> = {
   curvature: 0.14,
   loopMode: 'build',
   packetCycles: 3,
+  // Fixed by default: the camera is the answer to a dense mindmap, not something to impose on a
+  // seven-node one that already fits comfortably.
+  cameraMode: 'fit',
   showTitle: true,
   title: '',
   subtitle: '',
@@ -116,11 +122,17 @@ export function buildComposition(spec: CompositionSpec, signature: SignatureAsse
     packetCycles: Math.max(1, Math.round(spec.packetCycles)),
   }
 
+  // Stops are derived from the finished layout, so this must come after it. Built once per
+  // composition rather than per frame — the geometry is fixed for the life of a layout.
+  const cameraStops = spec.cameraMode === 'tour' ? buildCameraStops(layout) : null
+
   const renderOptions: RenderOptions = {
     theme,
     timeline,
     titleBlock: showTitle ? { title: titleText, subtitle: spec.subtitle.trim() || null } : null,
     titleSpace,
+    // A tour of one stop is just the wide shot, so it is not worth the transform.
+    cameraStops: cameraStops && cameraStops.length > 1 ? cameraStops : null,
   }
 
   return {

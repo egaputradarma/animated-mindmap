@@ -1,4 +1,57 @@
-# Mindmap authoring schema
+# Mindmap authoring
+
+Two input formats: a **markdown outline** (quickest to write) and a **JSON shape** (better for
+machine output). Both go through the same importer, so they support identical features.
+
+## Markdown outline
+
+Nested headings and list items become the hierarchy. Inspired by
+[markmap](https://github.com/markmap/markmap), though this is a small purpose-built parser rather
+than a dependency.
+
+```markdown
+# Zero Trust, in practice
+
+## 🔐 Identity — MFA and conditional access
+- Device posture
+- Session risk
+
+## 💻 Device health — compliance before access
+- Encryption check
+
+## 🕸️ Microsegmentation — blast radius containment {heavy}
+
+## 🤖 Continuous verification {planned} {semi}
+```
+
+Rules:
+
+- **Hierarchy** comes from heading level and list indentation. A list item never escapes the heading
+  above it, so two `##` sections keep their bullets separate.
+- **Icon** — a leading emoji is lifted out of the label automatically.
+- **Detail** — text after ` — ` (em dash), ` – ` (en dash) or ` | `. Deliberately *not* a colon,
+  since labels like `QA: SQL DB` are common and would be silently split.
+- **Hub** — the single root becomes the hub. If the outline has several top-level items, a hub is
+  synthesised from the mindmap name so the graph is not a set of disconnected islands.
+- Fenced code blocks are skipped. Blockquote markers and `- [x]` checkboxes are stripped.
+- Duplicate labels get distinct keys rather than being merged.
+
+### Modifiers
+
+Optional, in braces, anywhere on the line:
+
+| modifier | effect |
+| --- | --- |
+| `{heavy}` `{standard}` `{semi}` | weight of the connection into this node |
+| `{arrow}` `{arrow:start}` `{arrows}` | arrowheads on that connection |
+| `{planned}` | dims the node and stops packets reaching it |
+| `{hub}` | forces this node to be the hub |
+| `{blue}` `{gold}` `{pink}` … | fixes the accent colour |
+| `{from:right}` `{to:left}` | card face the connection leaves from / arrives at |
+
+An unknown modifier is reported as a warning and stripped, never left in the label.
+
+## JSON shape
 
 Hand this file plus a reference image to an AI assistant and ask for a mindmap. There are two ways
 to get the result into the app:
@@ -38,11 +91,27 @@ shadow the app's `/mindmaps` route — nginx would resolve that path to a direct
       "to": "node key or label",
       "label": "string, optional — small chip drawn mid-wire",
       "weight": "heavy | standard | semi, optional — defaults to standard",
-      "arrow": "none | end | start | both, optional — defaults to none"
+      "arrow": "none | end | start | both, optional — defaults to none",
+      "source_side": "auto | top | right | bottom | left, optional — defaults to auto",
+      "target_side": "auto | top | right | bottom | left, optional — defaults to auto"
     }
   ]
 }
 ```
+
+### Attachment sides
+
+`auto` runs the line centre-to-centre and clips it where it leaves the card. That is right for a
+radial layout, where every spoke already heads in the direction it is going.
+
+Naming a side pins the line to the midpoint of that face and makes it depart perpendicular to it, the
+way diagram tools draw connections — so a line leaving `right` heads right before turning, instead of
+cutting back across its own card. The two ends are independent, and mixing `auto` with a named side
+works fine.
+
+In the editor you can also just drag between the dots on each card; the handles you use are recorded
+as explicit sides. React Flow dumps and MICA payloads are read too — both store the handle id
+(`t`/`r`/`b`/`l`) rather than a side name.
 
 ### Connection weight
 

@@ -14,6 +14,7 @@
 
 import { useCallback, useEffect, useState } from 'react'
 import { importMindmap } from '../lib/importMindmap'
+import { importMarkdown } from '../lib/markdown'
 import type { Mindmap } from '../types/mindmap'
 
 const MANIFEST_URL = '/library/index.json'
@@ -76,10 +77,19 @@ export function useLibrary(): LibraryState {
           try {
             const fileResponse = await fetch(`/library/${file}`, { cache: 'no-cache' })
             if (!fileResponse.ok) throw new Error(`HTTP ${fileResponse.status}`)
+            const text = await fileResponse.text()
 
-            // Parsed through the same importer the paste box uses, so a library file cannot rely
-            // on behaviour the documented schema does not have.
-            const { mindmap } = importMindmap(await fileResponse.text())
+            // Both authoring formats are accepted here, chosen by extension. That is what lets the
+            // MCP server write a markdown outline straight to disk without needing its own copy of
+            // the parser — the app already has one, and duplicating it would let the two drift.
+            //
+            // Either way it goes through the same importer as the paste box, so a library file
+            // cannot rely on behaviour the documented schema does not have.
+            const isMarkdown = /\.(md|markdown)$/i.test(file)
+            const { mindmap } = isMarkdown
+              ? importMarkdown(text, file.replace(/\.[^.]+$/, ''))
+              : importMindmap(text)
+
             found.push({
               file,
               mindmap,

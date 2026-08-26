@@ -2,8 +2,9 @@ import { useCallback, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { BookOpen, Copy, FileJson, Pencil, Plus, Sparkles, Trash2 } from 'lucide-react'
 import AppLogo from '../components/AppLogo'
-import { Banner, Button, Field, SectionHeading, TextInput } from '../components/ui'
+import { Banner, Button, Field, SectionHeading, SegmentedControl, TextInput } from '../components/ui'
 import { useLibrary, type LibraryEntry } from '../hooks/useLibrary'
+import { importMarkdown } from '../lib/markdown'
 import { exportAuthoringJson, importMindmap, ImportError } from '../lib/importMindmap'
 import {
   createMindmap,
@@ -221,6 +222,20 @@ export default function MindmapsPage() {
   )
 }
 
+const MARKDOWN_EXAMPLE = `# Zero Trust, in practice
+
+## 🔐 Identity — MFA and conditional access
+- Device posture
+- Session risk
+
+## 💻 Device health — compliance before access
+- Encryption check
+- Patch status
+
+## 🕸️ Microsegmentation — blast radius containment {heavy}
+
+## 🤖 Continuous verification {planned} {semi}`
+
 const EXAMPLE = `{
   "name": "Zero Trust, in practice",
   "nodes": [
@@ -236,21 +251,36 @@ const EXAMPLE = `{
   ]
 }`
 
+type ImportMode = 'markdown' | 'json'
+
 function ImportPanel({ onClose, onImported }: { onClose: () => void; onImported: (id: string) => void }) {
+  // Markdown first: it is faster to write and read, and JSON is the fallback for machine output.
+  const [mode, setMode] = useState<ImportMode>('markdown')
   const [raw, setRaw] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [warnings, setWarnings] = useState<string[]>([])
+
+  const example = mode === 'markdown' ? MARKDOWN_EXAMPLE : EXAMPLE
+
+  const switchMode = (next: ImportMode) => {
+    setMode(next)
+    setError(null)
+    setWarnings([])
+    // Only clear text that was the other mode's example, so real work is never discarded.
+    if (raw.trim() === MARKDOWN_EXAMPLE.trim() || raw.trim() === EXAMPLE.trim()) setRaw('')
+  }
 
   const run = () => {
     setError(null)
     setWarnings([])
     try {
-      const { mindmap, format, warnings: notes } = importMindmap(raw)
+      const { mindmap, format, warnings: notes } =
+        mode === 'markdown' ? importMarkdown(raw, 'Mindmap') : importMindmap(raw)
       const saved = importAsNew(mindmap, mindmap.name)
       if (notes.length) {
         // Surface the notes but still navigate — they are advisory, not blocking.
-        setWarnings([`Read as ${format}.`, ...notes])
-        setTimeout(() => onImported(saved.id), 1400)
+        setWarnings([mode === 'markdown' ? 'Read as markdown outline.' : `Read as ${format}.`, ...notes])
+        setTimeout(() => onImported(saved.id), 1800)
         return
       }
       onImported(saved.id)
@@ -262,22 +292,54 @@ function ImportPanel({ onClose, onImported }: { onClose: () => void; onImported:
   return (
     <div className="mb-8 panel">
       <SectionHeading>Import a mindmap</SectionHeading>
-      <p className="mb-3 text-xs leading-relaxed text-slate-400">
-        Paste any of: the compact authoring shape below, a MICA mindmap (either its API JSON or its
-        frontend DTO), or a React Flow graph dump. The format is detected automatically.
-      </p>
-      <p className="mb-3 text-xs leading-relaxed text-slate-400">
-        To build one from a reference image, hand that image and{' '}
-        <span className="font-mono text-slate-300">docs/mindmap-schema.md</span> to your AI assistant and paste back what
-        it returns.
-      </p>
+
+      <div className="mb-3 max-w-xs">
+        <SegmentedControl<ImportMode>
+          value={mode}
+          onChange={switchMode}
+          options={[
+            { value: 'markdown', label: 'Markdown' },
+            { value: 'json', label: 'JSON' },
+          ]}
+        />
+      </div>
+
+      {mode === 'markdown' ? (
+        <>
+          <p className="mb-2 text-xs leading-relaxed text-slate-400">
+            Nested headings and bullets become the hierarchy. A leading emoji becomes the node icon, and text
+            after <span className="font-mono text-slate-300">—</span> or{' '}
+            <span className="font-mono text-slate-300">|</span> becomes the detail line.
+          </p>
+          <p className="mb-3 text-xs leading-relaxed text-slate-400">
+            Optional modifiers in braces:{' '}
+            <span className="font-mono text-slate-300">{'{heavy}'}</span>{' '}
+            <span className="font-mono text-slate-300">{'{semi}'}</span>{' '}
+            <span className="font-mono text-slate-300">{'{arrow}'}</span>{' '}
+            <span className="font-mono text-slate-300">{'{planned}'}</span>{' '}
+            <span className="font-mono text-slate-300">{'{gold}'}</span>
+          </p>
+        </>
+      ) : (
+        <>
+          <p className="mb-2 text-xs leading-relaxed text-slate-400">
+            Paste any of: the compact authoring shape, a MICA mindmap (either its API JSON or its frontend
+            DTO), or a React Flow graph dump. The format is detected automatically.
+          </p>
+          <p className="mb-3 text-xs leading-relaxed text-slate-400">
+            To build one from a reference image, hand that image and{' '}
+            <span className="font-mono text-slate-300">docs/mindmap-schema.md</span> to your AI assistant and paste
+            back what it returns.
+          </p>
+        </>
+      )}
 
       <textarea
         value={raw}
         onChange={e => setRaw(e.target.value)}
-        placeholder={EXAMPLE}
+        placeholder={example}
         spellCheck={false}
-        aria-label="Mindmap JSON"
+        aria-label={mode === 'markdown' ? 'Mindmap markdown outline' : 'Mindmap JSON'}
         className="h-56 w-full resize-y rounded-lg border border-ink-600 bg-ink-950 p-3 font-mono text-[11px] leading-relaxed text-slate-200 placeholder:text-slate-600 focus:border-blue-500 focus:outline-none"
       />
 
@@ -285,7 +347,7 @@ function ImportPanel({ onClose, onImported }: { onClose: () => void; onImported:
         <Button variant="primary" onClick={run} disabled={!raw.trim()}>
           Import
         </Button>
-        <Button onClick={() => setRaw(EXAMPLE)}>Use the example</Button>
+        <Button onClick={() => setRaw(example)}>Use the example</Button>
         <Button variant="ghost" onClick={onClose}>
           Cancel
         </Button>

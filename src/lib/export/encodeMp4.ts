@@ -1,67 +1,55 @@
-// H.264 MP4 encoding via WebCodecs, muxed by mp4-muxer.
+// H.264 MP4 encoding via Mediabunny.
 //
-// MP4 is the higher-quality option: no 256-colour ceiling, so the card gradients and packet
-// glows survive intact, at roughly a tenth of the GIF's size. The tradeoff is that LinkedIn
-// treats it as a video post — play button, video analytics — rather than an inline image.
+// MP4 is the higher-quality option: no 256-colour ceiling, so the card gradients and packet glows
+// survive intact, at roughly a tenth of the GIF's size. The tradeoff is that LinkedIn treats it as
+// a video post — play button, video analytics — rather than an inline image.
+//
+// WHY MEDIABUNNY RATHER THAN mp4-muxer
+//
+// This previously drove WebCodecs by hand and muxed with mp4-muxer, which its author has since
+// deprecated in favour of Mediabunny (same author; Mediabunny's MP4 muxer grew out of it). Beyond
+// clearing the deprecation, `CanvasSource` replaces the entire manual encoder stack: no VideoEncoder
+// to configure, no VideoFrame to construct and close, no codec-string probing, and no queue to
+// babysit. `add()` returns a promise that resolves when the pipeline is ready for more, so awaiting
+// it is the backpressure handling that previously had to be approximated by yielding every 8 frames.
 //
 // WHY NOT MediaRecorder, THE USUAL ANSWER
 //
-// `MediaRecorder` on a canvas stream captures in real time, so a 10s loop takes 10s and any
-// dropped frame is baked in. It also defaults to `video/webm`, which LinkedIn does not accept.
-// WebCodecs instead encodes frames as fast as the CPU allows, from an addressable timeline,
-// which is the whole point of making the renderer a pure function of `t`.
-//
-// The remaining alternative was `ffmpeg.wasm`, which works everywhere but adds ~25MB to the
-// bundle. WebCodecs is native, has no bundle cost, and covers current Chrome and Edge. Where
-// it is missing, `isMp4Supported` reports so and the UI steers to GIF instead.
+// `MediaRecorder` on a canvas stream captures in real time, so a 10s loop takes 10s and any dropped
+// frame is baked in. It also defaults to `video/webm`, which LinkedIn does not accept. Encoding from
+// an addressable timeline is the whole point of making the renderer a pure function of `t`.
 
-import { ArrayBufferTarget, Muxer } from 'mp4-muxer'
+import {
+  BufferTarget,
+  CanvasSource,
+  getFirstEncodableVideoCodec,
+  Mp4OutputFormat,
+  Output,
+  QUALITY_HIGH,
+  type VideoCodec,
+} from 'mediabunny'
 import type { Composition } from '../composition'
+import { isMp4Supported } from './capabilities'
 import { createFrameCanvas, frameCount, shouldYield, yieldToBrowser, type EncodeSettings, type ProgressFn } from './frames'
 
 /**
- * Tried in order. High profile first for the best compression on flat gradients; the baseline
- * entries are fallbacks for encoders that refuse High at the requested resolution. Level is
- * part of the string, so 1920×1080 needs at least 4.0 (`...28`).
+ * Tried in order. AVC (H.264) first and by a wide margin: it is the only one of these that every
+ * social platform and player reliably decodes. The rest exist so an unusual browser still produces
+ * *something*, and the codec actually used is reported back so the UI can say so.
  */
-const CODEC_CANDIDATES = ['avc1.640028', 'avc1.4D0028', 'avc1.42E028', 'avc1.640020', 'avc1.42001F'] as const
+const CODEC_PREFERENCE: VideoCodec[] = ['avc', 'hevc', 'av1', 'vp9']
+
+/** Key frame every 2s: good seeking without inflating a short loop. */
+const KEY_FRAME_INTERVAL_SECONDS = 2
 
 export interface Mp4Result {
   blob: Blob
   width: number
   height: number
   frames: number
-  codec: string
-}
-
-export const isMp4Supported = (): boolean =>
-  typeof globalThis.VideoEncoder === 'function' && typeof globalThis.VideoFrame === 'function'
-
-/**
- * Bitrate target. Scaled by pixel count and frame rate so a 1920×1080 clip is not starved and
- * a 1080×1350 one is not bloated. 0.11 bits per pixel per frame is generous for synthetic flat
- * art, which compresses far better than camera footage.
- */
-function bitrateFor(width: number, height: number, fps: number): number {
-  return Math.round(Math.min(16_000_000, Math.max(2_000_000, width * height * fps * 0.11)))
-}
-
-async function pickCodec(width: number, height: number, fps: number): Promise<string> {
-  for (const codec of CODEC_CANDIDATES) {
-    try {
-      const support = await VideoEncoder.isConfigSupported({
-        codec,
-        width,
-        height,
-        bitrate: bitrateFor(width, height, fps),
-        framerate: fps,
-      })
-      if (support.supported) return codec
-    } catch {
-      // An unparseable codec string throws rather than reporting unsupported; try the next.
-    }
-  }
-  throw new Error('No supported H.264 encoder configuration was found for this size.')
+  codec: VideoCodec
+  /** True when the codec is not H.264, which is worth warning about before posting. */
+  unusualCodec: boolean
 }
 
 export async function encodeMp4(
@@ -76,72 +64,55 @@ export async function encodeMp4(
   const total = frameCount(settings)
   const frame = createFrameCanvas(composition, settings.maxSide)
   const { width, height } = frame
-  const codec = await pickCodec(width, height, settings.fps)
 
-  const muxer = new Muxer({
-    target: new ArrayBufferTarget(),
-    video: { codec: 'avc', width, height, frameRate: settings.fps },
-    // Metadata at the front. Costs memory during finalisation but produces a file that starts
-    // playing without a full download — which is what a social feed needs.
-    fastStart: 'in-memory',
-  })
-
-  let encodeError: Error | null = null
-  const encoder = new VideoEncoder({
-    output: (chunk, meta) => muxer.addVideoChunk(chunk, meta),
-    // The encoder reports failures on this callback, not by rejecting; capture and rethrow
-    // after the loop so the error surfaces instead of vanishing.
-    error: err => {
-      encodeError = err instanceof Error ? err : new Error(String(err))
-    },
-  })
-
-  encoder.configure({
-    codec,
-    width,
-    height,
-    bitrate: bitrateFor(width, height, settings.fps),
-    framerate: settings.fps,
-    latencyMode: 'quality',
-  })
-
-  const frameDuration = 1_000_000 / settings.fps // microseconds
-
-  try {
-    for (let i = 0; i < total; i++) {
-      if (encodeError) throw encodeError
-      frame.drawAt(i / total)
-
-      const videoFrame = new VideoFrame(frame.canvas, {
-        timestamp: Math.round(i * frameDuration),
-        duration: Math.round(frameDuration),
-      })
-      // A keyframe every ~2s keeps seeking responsive and gives the loop a clean entry point.
-      encoder.encode(videoFrame, { keyFrame: i % Math.max(1, Math.round(settings.fps * 2)) === 0 })
-      videoFrame.close()
-
-      onProgress?.({ value: (i / total) * 0.92, label: `Encoding MP4 · frame ${i + 1}/${total}` })
-
-      // Without this the queue grows unbounded and memory climbs to the point of a tab crash
-      // on longer clips; the encoder needs the main thread back to drain it.
-      if (shouldYield(i)) await yieldToBrowser()
-    }
-
-    onProgress?.({ value: 0.95, label: 'Finalising MP4…' })
-    await encoder.flush()
-    if (encodeError) throw encodeError
-    muxer.finalize()
-  } finally {
-    // `close()` on an already-errored encoder throws again; the state is unrecoverable either
-    // way, so the original error is the one worth propagating.
-    try {
-      encoder.close()
-    } catch {
-      /* ignore */
-    }
+  onProgress?.({ value: 0, label: 'Checking encoder support…' })
+  const codec = await getFirstEncodableVideoCodec(CODEC_PREFERENCE, { width, height })
+  if (!codec) {
+    throw new Error(`No video encoder available for ${width}×${height} in this browser.`)
   }
 
-  const { buffer } = muxer.target
+  // Held separately rather than read back off `output.target`, which avoids threading Output's
+  // target generic through this function for no benefit.
+  const target = new BufferTarget()
+  const output = new Output({
+    // Metadata at the front. Costs memory during finalisation but produces a file that starts
+    // playing without a full download — what a social feed needs.
+    format: new Mp4OutputFormat({ fastStart: 'in-memory' }),
+    target,
+  })
+
+  const source = new CanvasSource(frame.canvas, {
+    codec,
+    // A qualitative preset rather than a hand-computed bitrate: Mediabunny already scales these by
+    // resolution and frame rate, which is exactly what the old bits-per-pixel arithmetic was for.
+    quality: QUALITY_HIGH,
+    keyFrameInterval: KEY_FRAME_INTERVAL_SECONDS,
+  })
+
+  output.addVideoTrack(source, { frameRate: settings.fps })
+  await output.start()
+
+  const frameDuration = 1 / settings.fps
+
+  for (let i = 0; i < total; i++) {
+    frame.drawAt(i / total)
+    // Awaiting respects encoder and writer backpressure, so the queue cannot grow unbounded the way
+    // it could when frames were pushed at a VideoEncoder as fast as the loop ran.
+    await source.add(i * frameDuration, frameDuration)
+
+    onProgress?.({ value: (i / total) * 0.92, label: `Encoding MP4 · frame ${i + 1}/${total}` })
+
+    // Backpressure yields to the microtask queue, which is not enough for the browser to repaint the
+    // progress bar. This hands back a full task occasionally so the UI stays alive.
+    if (shouldYield(i)) await yieldToBrowser()
+  }
+
+  onProgress?.({ value: 0.95, label: 'Finalising MP4…' })
+  await output.finalize()
+
+  const buffer = target.buffer
+  if (!buffer) throw new Error('Encoding finished but produced no data.')
+
   onProgress?.({ value: 1, label: 'Done' })
 
   return {
@@ -150,5 +121,6 @@ export async function encodeMp4(
     height,
     frames: total,
     codec,
+    unusualCodec: codec !== 'avc',
   }
 }

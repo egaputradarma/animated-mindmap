@@ -61,6 +61,26 @@ export type EdgeWeight = 'heavy' | 'standard' | 'semi'
 /** Which ends of a connection get an arrowhead. */
 export type EdgeArrow = 'none' | 'start' | 'end' | 'both'
 
+/**
+ * Which side of a card a connection attaches to.
+ *
+ * `auto` runs the line centre-to-centre and clips it where it leaves the card, which is right for a
+ * radial layout — every spoke naturally leaves in the direction it is going. Naming a side takes
+ * manual control, and the curve then departs perpendicular to that face, the way diagram tools draw
+ * connections.
+ */
+export type EdgeSide = 'auto' | 'top' | 'right' | 'bottom' | 'left'
+
+export const EDGE_SIDES: readonly EdgeSide[] = ['auto', 'top', 'right', 'bottom', 'left']
+
+export const EDGE_SIDE_LABELS: Record<EdgeSide, string> = {
+  auto: 'Auto',
+  top: 'Top',
+  right: 'Right',
+  bottom: 'Bottom',
+  left: 'Left',
+}
+
 export const EDGE_WEIGHTS: readonly EdgeWeight[] = ['heavy', 'standard', 'semi']
 export const EDGE_ARROWS: readonly EdgeArrow[] = ['none', 'end', 'start', 'both']
 
@@ -79,10 +99,16 @@ export interface MindmapEdge {
   weight?: EdgeWeight
   /** Arrowhead placement. Absent means `none`. */
   arrow?: EdgeArrow
+  /** Card side the line leaves from. Absent means `auto`. */
+  source_side?: EdgeSide
+  /** Card side the line arrives at. Absent means `auto`. */
+  target_side?: EdgeSide
 }
 
 export const edgeWeightOf = (edge: MindmapEdge): EdgeWeight => edge.weight ?? DEFAULT_EDGE_WEIGHT
 export const edgeArrowOf = (edge: MindmapEdge): EdgeArrow => edge.arrow ?? DEFAULT_EDGE_ARROW
+export const edgeSourceSideOf = (edge: MindmapEdge): EdgeSide => edge.source_side ?? 'auto'
+export const edgeTargetSideOf = (edge: MindmapEdge): EdgeSide => edge.target_side ?? 'auto'
 
 /** Labels for the editor controls, kept next to the type so the two cannot drift apart. */
 export const EDGE_WEIGHT_LABELS: Record<EdgeWeight, string> = {

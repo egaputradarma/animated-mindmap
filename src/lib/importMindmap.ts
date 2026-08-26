@@ -22,9 +22,11 @@ import {
   DEFAULT_EDGE_ARROW,
   DEFAULT_EDGE_WEIGHT,
   EDGE_ARROWS,
+  EDGE_SIDES,
   EDGE_WEIGHTS,
   type AccentName,
   type EdgeArrow,
+  type EdgeSide,
   type EdgeWeight,
   type Mindmap,
   type MindmapEdge,
@@ -63,6 +65,18 @@ function edgeWeight(v: unknown): EdgeWeight | null {
 function edgeArrow(v: unknown): EdgeArrow | null {
   const s = str(v)?.toLowerCase()
   return s && (EDGE_ARROWS as readonly string[]).includes(s) ? (s as EdgeArrow) : null
+}
+
+/**
+ * Accepts a side name, and also the single-letter handle ids this app's editor and MICA both use
+ * (`t`/`r`/`b`/`l`) — a React Flow dump carries `sourceHandle: 'r'` rather than `source_side: 'right'`.
+ */
+function edgeSide(v: unknown): EdgeSide | null {
+  const s = str(v)?.toLowerCase()
+  if (!s) return null
+  if ((EDGE_SIDES as readonly string[]).includes(s)) return s as EdgeSide
+  const fromHandle: Record<string, EdgeSide> = { t: 'top', r: 'right', b: 'bottom', l: 'left' }
+  return fromHandle[s] ?? null
 }
 
 /** MICA stores presentation metadata as a JSON string. Unparseable is not an error here. */
@@ -214,6 +228,10 @@ export function importMindmap(raw: string): ImportResult {
       label: str(src.label),
       weight: edgeWeight(src.weight ?? meta.weight) ?? (legacyDashed ? 'semi' : DEFAULT_EDGE_WEIGHT),
       arrow: edgeArrow(src.arrow ?? meta.arrow) ?? DEFAULT_EDGE_ARROW,
+      // `sourceHandle`/`targetHandle` cover React Flow dumps and MICA, which record the handle rather
+      // than a side name.
+      source_side: edgeSide(src.source_side ?? meta.source_side ?? src.sourceHandle) ?? 'auto',
+      target_side: edgeSide(src.target_side ?? meta.target_side ?? src.targetHandle) ?? 'auto',
     })
   }
 
@@ -258,6 +276,8 @@ export function exportAuthoringJson(m: Mindmap): string {
         // Defaults stay omitted so a round-trip produces the same terse JSON it came from.
         weight: e.weight && e.weight !== DEFAULT_EDGE_WEIGHT ? e.weight : undefined,
         arrow: e.arrow && e.arrow !== DEFAULT_EDGE_ARROW ? e.arrow : undefined,
+        source_side: e.source_side && e.source_side !== 'auto' ? e.source_side : undefined,
+        target_side: e.target_side && e.target_side !== 'auto' ? e.target_side : undefined,
       })),
     },
     null,
