@@ -10,7 +10,7 @@ import { isMp4Supported } from '../lib/export/capabilities'
 import type { DitherMode } from '../lib/export/dither'
 import { downloadBlob, formatBytes, LINKEDIN_GIF_LIMIT_BYTES } from '../lib/export/download'
 import { encodePng, renderThumbnail } from '../lib/export/encodePng'
-import type { EncodeProgress } from '../lib/export/frames'
+import { MAX_ENCODE_SIDE, outputSize, type EncodeProgress } from '../lib/export/frames'
 import { slugify } from '../lib/id'
 import type { LayoutMode } from '../lib/layout'
 import type { ThemeName } from '../lib/palette'
@@ -36,8 +36,23 @@ interface ExportSettings {
 // MP4: 30fps and full resolution — H.264 has none of GIF's constraints.
 const FORMAT_DEFAULTS: Record<Format, ExportSettings> = {
   gif: { fps: 20, durationSeconds: 9, maxSide: 720 },
-  mp4: { fps: 30, durationSeconds: 9, maxSide: 1920 },
-  png: { fps: 1, durationSeconds: 1, maxSide: 1920 },
+  // 2160 rather than the preset's own size. The renderer is fully vector, so rendering above the
+  // composition's nominal dimensions is real supersampling — see outputSize in frames.ts.
+  mp4: { fps: 30, durationSeconds: 9, maxSide: 2160 },
+  png: { fps: 1, durationSeconds: 1, maxSide: 2400 },
+}
+
+/**
+ * Upper limit offered per format.
+ *
+ * GIF stays modest: it is capped at 256 colours and every frame is stored whole, so resolution is the
+ * fastest way to blow past LinkedIn's inline limit. MP4 and PNG go to the encoder ceiling, because for
+ * those the only cost of more pixels is time.
+ */
+const MAX_SIDE_BY_FORMAT: Record<Format, number> = {
+  gif: 1280,
+  mp4: MAX_ENCODE_SIDE,
+  png: MAX_ENCODE_SIDE,
 }
 
 interface ExportResult {
@@ -133,9 +148,12 @@ export default function AnimatePage() {
 
   const changeFormat = (next: Format) => {
     setFormat(next)
-    // Clamp the resolution default to what the preset can actually produce.
-    const longest = Math.max(SIZE_PRESETS[spec.preset].width, SIZE_PRESETS[spec.preset].height)
-    setExportSettings({ ...FORMAT_DEFAULTS[next], maxSide: Math.min(FORMAT_DEFAULTS[next].maxSide, longest) })
+    // No longer clamped to the preset's own dimensions. That clamp was what held MP4 down to 1200px on
+    // the square preset: the aspect presets describe the *composition*, not a resolution ceiling.
+    setExportSettings({
+      ...FORMAT_DEFAULTS[next],
+      maxSide: Math.min(FORMAT_DEFAULTS[next].maxSide, MAX_SIDE_BY_FORMAT[next]),
+    })
     setResult(null)
   }
 
@@ -192,7 +210,9 @@ export default function AnimatePage() {
           height: mp4.height,
           note: mp4.unusualCodec
             ? `Encoded as ${mp4.codec.toUpperCase()} because H.264 was unavailable here. Some platforms will not play that — check before posting.`
-            : 'Posts as a video, so it gets a play button and video analytics rather than inline image autoplay.',
+            : mp4.downscaled
+              ? `This browser refused the requested resolution, so it was encoded at ${mp4.width}×${mp4.height} instead.`
+              : 'Posts as a video, so it gets a play button and video analytics rather than inline image autoplay.',
         })
       }
     } catch (err) {
@@ -226,6 +246,8 @@ export default function AnimatePage() {
   const mp4Available = isMp4Supported()
   // Number of camera stops a tour would have: the establishing wide shot plus one per branch.
   const branchCount = new Set(composition.layout.nodes.map(n => n.branch).filter(Boolean)).size + 1
+  // Shown next to the slider so the actual pixel dimensions are never a surprise.
+  const outputDimensions = outputSize(composition, exportSettings.maxSide)
 
   return (
     <div className="flex h-full flex-col">
@@ -377,17 +399,31 @@ export default function AnimatePage() {
                 </>
               )}
 
-              <Field label="Resolution" hint={`Longest side. Preset is ${preset.width} × ${preset.height}.`}>
+              <Field
+                label="Resolution"
+                hint={
+                  format === 'gif'
+                    ? `Longest side. Every frame is stored whole, so this drives file size hard.`
+                    : `Longest side. Above ${Math.max(preset.width, preset.height)}px the frame is re-rendered larger, not upscaled — text stays sharp.`
+                }
+              >
                 <Slider
                   value={exportSettings.maxSide}
                   onChange={v => setExportSettings(s => ({ ...s, maxSide: v }))}
                   min={360}
-                  max={Math.max(preset.width, preset.height)}
-                  step={40}
+                  max={MAX_SIDE_BY_FORMAT[format]}
+                  step={format === 'gif' ? 40 : 120}
                   format={v => `${v}px`}
                   ariaLabel="Longest side in pixels"
                 />
               </Field>
+              {format !== 'gif' && (
+                <p className="text-[11px] text-slate-500">
+                  Output {outputDimensions.width} × {outputDimensions.height}
+                  {exportSettings.maxSide > Math.max(preset.width, preset.height) &&
+                    ` · ${(exportSettings.maxSide / Math.max(preset.width, preset.height)).toFixed(1)}× supersampled`}
+                </p>
+              )}
 
               {format !== 'png' && (
                 <p className="text-[11px] text-slate-500">

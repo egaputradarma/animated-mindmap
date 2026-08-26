@@ -26,12 +26,35 @@ export const frameCount = (settings: EncodeSettings): number =>
   Math.max(1, Math.round(settings.fps * settings.durationSeconds))
 
 /**
- * Output dimensions after honouring `maxSide`, kept even because H.264 requires even
- * dimensions and an odd width silently fails to configure on some encoders.
+ * Hard ceiling on either dimension.
+ *
+ * Browser H.264 encoders commonly refuse beyond 4096 in either axis, and hardware paths often cap
+ * there too. Past this the encoder configuration fails rather than degrading, so it is capped here.
+ */
+export const MAX_ENCODE_SIDE = 4096
+
+/**
+ * Output dimensions after honouring `maxSide`, kept even because H.264 requires even dimensions and
+ * an odd width silently fails to configure on some encoders.
+ *
+ * UPSCALING IS DELIBERATE HERE.
+ *
+ * This used to clamp the scale to 1, on the reasoning that enlarging a source adds nothing. That is
+ * true of a bitmap and false of this renderer: nothing is resampled, because every frame is drawn from
+ * scratch as a pure function of the composition. Card sizes, stroke widths and font sizes all derive
+ * from `layout.scale`, and `createFrameCanvas` applies the output scale as a canvas transform *before*
+ * drawing — so text is rasterised at the target size with full hinting, not stretched.
+ *
+ * Rendering a 1200-unit composition at 2400px is therefore genuine supersampling, and that clamp was
+ * the reason MP4 exports could never exceed the preset's own dimensions.
  */
 export function outputSize(composition: Composition, maxSide: number): { width: number; height: number } {
   const longest = Math.max(composition.width, composition.height)
-  const scale = Math.min(1, maxSide / longest)
+  const requested = Math.max(1, maxSide) / longest
+  // Cap by the longest side so the shorter one cannot sneak past the limit on an extreme aspect.
+  const ceiling = MAX_ENCODE_SIDE / longest
+
+  const scale = Math.min(requested, ceiling)
   return {
     width: makeEven(composition.width * scale),
     height: makeEven(composition.height * scale),

@@ -15,7 +15,7 @@ import { edgeArrowOf, edgeWeightOf, migrateEdge } from '../types/mindmap'
 import { opaqueBoundsFromAlpha, signatureRect, type SignatureCorner, type SignatureOptions } from './signature'
 import { estimator, wrapText } from './text'
 import { edgeState, frameState, nodeState, packetCyclesFor, seedFromString, type TimelineOptions } from './timeline'
-import { outputSize } from './export/frames'
+import { MAX_ENCODE_SIDE, outputSize } from './export/frames'
 import type { Mindmap } from '../types/mindmap'
 
 // ── Fixtures ──
@@ -761,14 +761,38 @@ describe('output size', () => {
     }
   })
 
-  it('never exceeds maxSide and never upscales past the composition', () => {
+  it('never exceeds the requested maxSide', () => {
     for (const preset of PRESETS) {
-      for (const maxSide of [400, 900, 4000]) {
+      for (const maxSide of [400, 900, 2160, 4000]) {
         const size = outputSize(composition(preset.width, preset.height), maxSide)
         expect(Math.max(size.width, size.height)).toBeLessThanOrEqual(maxSide)
-        expect(size.width).toBeLessThanOrEqual(preset.width)
       }
     }
+  })
+
+  it('renders above the composition size when asked, rather than clamping to it', () => {
+    // This is the behaviour that was missing: a clamp to scale <= 1 meant MP4 could never exceed the
+    // preset's own dimensions, so the square preset topped out at 1200px however high the slider went.
+    // Upscaling is valid here because frames are drawn from scratch at the output size, not resampled.
+    const size = outputSize(composition(1200, 1200), 2400)
+    expect(size.width).toBe(2400)
+    expect(size.height).toBe(2400)
+  })
+
+  it('caps at the encoder ceiling even when more is requested', () => {
+    const size = outputSize(composition(1200, 1200), 10_000)
+    expect(Math.max(size.width, size.height)).toBeLessThanOrEqual(MAX_ENCODE_SIDE)
+  })
+
+  it('caps by the longest side, so the shorter axis cannot exceed the ceiling either', () => {
+    const size = outputSize(composition(1080, 1350), 10_000)
+    expect(size.height).toBeLessThanOrEqual(MAX_ENCODE_SIDE)
+    expect(size.width).toBeLessThanOrEqual(MAX_ENCODE_SIDE)
+  })
+
+  it('keeps the aspect ratio when scaling up', () => {
+    const size = outputSize(composition(1080, 1350), 2700)
+    expect(size.width / size.height).toBeCloseTo(1080 / 1350, 2)
   })
 
   it('keeps the aspect ratio within rounding error', () => {
