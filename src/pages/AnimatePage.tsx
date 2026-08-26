@@ -519,8 +519,22 @@ export default function AnimatePage() {
                   ]}
                 />
               </Field>
+              <Field
+                label="Node spacing"
+                hint="Minimum clearance between cards. In radial mode this sizes the rings, so no two cards can touch."
+              >
+                <Slider
+                  value={spec.nodeGap}
+                  onChange={v => update('nodeGap', v)}
+                  min={0}
+                  max={90}
+                  step={2}
+                  format={v => `${v}`}
+                  ariaLabel="Minimum gap between nodes"
+                />
+              </Field>
               {spec.layoutMode === 'radial' && (
-                <Field label="Spread" hint="Lower packs the graph tighter, which makes the cards bigger.">
+                <Field label="Spread" hint="Scales the whole arrangement on top of the spacing above.">
                   <Slider
                     value={spec.spread}
                     onChange={v => update('spread', v)}
@@ -532,6 +546,15 @@ export default function AnimatePage() {
                   />
                 </Field>
               )}
+              <Toggle
+                checked={spec.preventOverlap}
+                onChange={v => update('preventOverlap', v)}
+                label="Tidy overlaps"
+              />
+              <p className="text-[11px] leading-snug text-slate-500">
+                Nudges any cards that still collide apart, keeping the hub fixed. Does the real work in
+                &ldquo;As arranged&rdquo; mode, where dragged cards overlap easily.
+              </p>
               <Toggle
                 checked={spec.uniformCardHeight}
                 onChange={v => update('uniformCardHeight', v)}

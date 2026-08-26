@@ -51,8 +51,12 @@ export interface CompositionSpec {
   preset: PresetName
   theme: ThemeName
   layoutMode: LayoutMode
-  /** Ring spacing multiplier. Lower packs the graph tighter and so enlarges the cards. */
+  /** Ring spacing multiplier, applied on top of the gap. Lower packs tighter and enlarges cards. */
   spread: number
+  /** Minimum clearance between cards, in abstract units. The main spacing control. */
+  nodeGap: number
+  /** Nudge any remaining overlaps apart after placement. */
+  preventOverlap: boolean
   curvature: number
   /** Equalise card heights. Mostly for hand-arranged grids, where ragged heights show. */
   uniformCardHeight: boolean
@@ -73,6 +77,10 @@ export const DEFAULT_SPEC: Omit<CompositionSpec, 'mindmap' | 'signature'> = {
   theme: 'dark',
   layoutMode: 'radial',
   spread: 1,
+  // 18 abstract units against a 150-wide card: a visible channel between neighbours without throwing
+  // the graph wide open.
+  nodeGap: 18,
+  preventOverlap: true,
   curvature: 0.14,
   // Off by default: radial layouts look better with cards sized to their content, and this exists for
   // the hand-arranged case where ragged heights are obvious.
@@ -114,6 +122,8 @@ export function buildComposition(spec: CompositionSpec, signature: SignatureAsse
     height: preset.height,
     mode: spec.layoutMode,
     spread: spec.spread,
+    nodeGap: spec.nodeGap,
+    preventOverlap: spec.preventOverlap,
     curvature: spec.curvature,
     uniformCardHeight: spec.uniformCardHeight,
     padding: Math.min(preset.width, preset.height) * 0.055,

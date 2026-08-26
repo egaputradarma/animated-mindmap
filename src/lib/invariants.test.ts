@@ -6,11 +6,13 @@
 // comment. All of it runs in plain node: the geometry, timeline and layout layers are pure by
 // design, which is what makes them testable without a canvas.
 
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { arcBetween, measure, pointAtFraction, tangentAtFraction } from './bezier'
 import { buildGraph, edgeRevealOrder, revealOrder } from './graph'
 import { exportAuthoringJson, importMindmap } from './importMindmap'
-import { layoutMindmap, type LayoutOptions } from './layout'
+import { layoutMindmap, type LayoutOptions, type PlacedNode } from './layout'
 import { edgeArrowOf, edgeWeightOf, migrateEdge } from '../types/mindmap'
 import { opaqueBoundsFromAlpha, signatureRect, type SignatureCorner, type SignatureOptions } from './signature'
 import { estimator, wrapText } from './text'
@@ -53,6 +55,8 @@ const layoutOptions = (over: Partial<LayoutOptions> = {}): LayoutOptions => ({
   height: 1200,
   mode: 'radial',
   spread: 1,
+  nodeGap: 18,
+  preventOverlap: true,
   uniformCardHeight: false,
   curvature: 0.14,
   padding: 66,
@@ -218,16 +222,119 @@ describe('layout', () => {
   })
 
   it('does not overlap sibling cards in the radial layout', () => {
-    const layout = layoutMindmap(fixture(), layoutOptions())
+    expectNoOverlaps(layoutMindmap(fixture(), layoutOptions()))
+  })
+
+  /**
+   * The case that was broken.
+   *
+   * A hub with many children puts cards all the way round the ring, and the old radius formula sized it
+   * from card WIDTH alone. On the left and right flanks the ring runs vertically, so neighbours stack and
+   * their HEIGHT is what needs to clear — which was never accounted for, and those flanks overlapped.
+   */
+  it('keeps a wide fan of children clear at every ring position', () => {
+    for (const count of [8, 12, 17, 24]) {
+      const map: Mindmap = {
+        id: `fan-${count}`,
+        name: `Fan of ${count}`,
+        description: null,
+        nodes: [
+          { node_key: 'hub', label: 'Hub', position_x: 0, position_y: 0, hero: true },
+          ...Array.from({ length: count }, (_, i) => ({
+            node_key: `n${i}`,
+            label: `${i + 1} · Stage name here`,
+            // A detail line long enough to wrap, which is what makes cards tall enough to collide.
+            detail: 'Several words of supporting detail that wraps onto more than one line',
+            position_x: 0,
+            position_y: 0,
+          })),
+        ],
+        edges: Array.from({ length: count }, (_, i) => ({
+          id: `e${i}`,
+          source_node_key: 'hub',
+          target_node_key: `n${i}`,
+        })),
+        updated_at: new Date().toISOString(),
+      }
+
+      expectNoOverlaps(layoutMindmap(map, layoutOptions()), `fan of ${count}`)
+    }
+  })
+
+  it('keeps the real 17-stage library mindmap clear', () => {
+    const raw = readFileSync(join(process.cwd(), 'public', 'library', 'it-ops-roadmap-full.json'), 'utf8')
+    const { mindmap } = importMindmap(raw)
+
+    // The exact map that was overlapping on screen, checked at every preset.
+    for (const preset of PRESETS) {
+      expectNoOverlaps(layoutMindmap(mindmap, layoutOptions(preset)), `${preset.width}x${preset.height}`)
+    }
+  })
+
+  it('honours the requested gap, not merely touching', () => {
+    const layout = layoutMindmap(fixture(), layoutOptions({ nodeGap: 40 }))
+    // The gap is in abstract units, so compare in the same space.
+    const gapInPx = 40 * layout.scale
+
     for (let i = 0; i < layout.nodes.length; i++) {
       for (let j = i + 1; j < layout.nodes.length; j++) {
         const a = layout.nodes[i]
         const b = layout.nodes[j]
-        const overlapX = Math.abs(a.x - b.x) < (a.w + b.w) / 2
-        const overlapY = Math.abs(a.y - b.y) < (a.h + b.h) / 2
-        expect(overlapX && overlapY).toBe(false)
+        const clearX = Math.abs(a.x - b.x) - (a.w + b.w) / 2
+        const clearY = Math.abs(a.y - b.y) - (a.h + b.h) / 2
+        // Separated on at least one axis by at least the gap, minus a rounding allowance.
+        expect(Math.max(clearX, clearY)).toBeGreaterThan(gapInPx - 2)
       }
     }
+  })
+
+  it('spaces cards further apart as the gap rises', () => {
+    const tight = layoutMindmap(fixture(), layoutOptions({ nodeGap: 4 }))
+    const loose = layoutMindmap(fixture(), layoutOptions({ nodeGap: 70 }))
+
+    // Both are fitted to the same canvas, so a larger gap shows up as smaller cards rather than a
+    // larger graph. That is the observable consequence of asking for more space.
+    expect(loose.scale).toBeLessThan(tight.scale)
+  })
+
+  it('separates overlapping hand-arranged cards', () => {
+    const stacked: Mindmap = {
+      id: 'stacked',
+      name: 'Stacked',
+      description: null,
+      nodes: [
+        { node_key: 'hub', label: 'Hub', position_x: 0, position_y: 0, hero: true },
+        // Deliberately dropped almost on top of the hub, as dragging easily produces.
+        { node_key: 'a', label: 'Alpha', position_x: 6, position_y: 8 },
+        { node_key: 'b', label: 'Beta', position_x: 12, position_y: 16 },
+      ],
+      edges: [
+        { id: 'e1', source_node_key: 'hub', target_node_key: 'a' },
+        { id: 'e2', source_node_key: 'hub', target_node_key: 'b' },
+      ],
+      updated_at: new Date().toISOString(),
+    }
+
+    expectNoOverlaps(layoutMindmap(stacked, layoutOptions({ mode: 'manual' })), 'manual')
+  })
+
+  it('leaves overlaps alone when tidying is switched off', () => {
+    const stacked: Mindmap = {
+      id: 'stacked2',
+      name: 'Stacked',
+      description: null,
+      nodes: [
+        { node_key: 'hub', label: 'Hub', position_x: 0, position_y: 0, hero: true },
+        { node_key: 'a', label: 'Alpha', position_x: 4, position_y: 4 },
+      ],
+      edges: [{ id: 'e1', source_node_key: 'hub', target_node_key: 'a' }],
+      updated_at: new Date().toISOString(),
+    }
+
+    const layout = layoutMindmap(stacked, layoutOptions({ mode: 'manual', preventOverlap: false }))
+    const [a, b] = layout.nodes
+    // Confirms the toggle actually gates the behaviour rather than the fix being unconditional.
+    expect(Math.abs(a.x - b.x) < (a.w + b.w) / 2 && Math.abs(a.y - b.y) < (a.h + b.h) / 2).toBe(true)
   })
 
   it('survives a single-node mindmap', () => {
@@ -426,6 +533,28 @@ describe('connections', () => {
     expect(dot).toBeLessThan(0)
   })
 })
+
+/**
+ * Asserts no two cards overlap, naming the offending pair on failure.
+ *
+ * Reporting which cards collided matters: "expected true to be false" on a 17-node layout tells you
+ * nothing about where to look.
+ */
+function expectNoOverlaps(layout: { nodes: PlacedNode[] }, context = ''): void {
+  const collisions: string[] = []
+
+  for (let i = 0; i < layout.nodes.length; i++) {
+    for (let j = i + 1; j < layout.nodes.length; j++) {
+      const a = layout.nodes[i]
+      const b = layout.nodes[j]
+      const overlapX = Math.abs(a.x - b.x) < (a.w + b.w) / 2
+      const overlapY = Math.abs(a.y - b.y) < (a.h + b.h) / 2
+      if (overlapX && overlapY) collisions.push(`${a.key} ↔ ${b.key}`)
+    }
+  }
+
+  expect(collisions, `overlapping cards${context ? ` (${context})` : ''}`).toEqual([])
+}
 
 const insideCard = (p: { x: number; y: number }, node: { x: number; y: number; w: number; h: number }): boolean =>
   p.x > node.x - node.w / 2 && p.x < node.x + node.w / 2 && p.y > node.y - node.h / 2 && p.y < node.y + node.h / 2

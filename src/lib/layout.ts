@@ -19,6 +19,7 @@ import {
   type Point,
   type Rect,
 } from './bezier'
+import { separateBoxes } from './arrange'
 import { buildGraph, edgeRevealOrder, leafCounts, revealOrder, type GraphView } from './graph'
 import { estimator, wrapText } from './text'
 import {
@@ -117,6 +118,19 @@ export interface LayoutOptions {
    * export, because the export re-derives each height. Equalising removes both problems.
    */
   uniformCardHeight: boolean
+  /**
+   * Minimum clearance between any two cards, in abstract units where a card is 150 wide.
+   *
+   * In radial mode this drives the ring radii directly, so raising it pushes rings outward rather than
+   * just adding padding. It is the single control for how far apart everything sits.
+   */
+  nodeGap: number
+  /**
+   * Nudge overlapping cards apart after placement.
+   *
+   * Radial placement should not need it; hand-arranged layouts almost always do.
+   */
+  preventOverlap: boolean
   /** Perpendicular bow of the connectors as a fraction of their span. 0 draws straight lines. */
   curvature: number
   /** Inset from every canvas edge, in px. */
@@ -195,6 +209,8 @@ interface AbstractNode {
   node: MindmapNode
   x: number
   y: number
+  /** Angle on the ring, radians. Radial mode only; assigned before radii are known. */
+  angle: number
   w: number
   h: number
   depth: number
@@ -218,6 +234,7 @@ export function layoutMindmap(mindmap: Mindmap, options: LayoutOptions): Layout 
       node,
       x: 0,
       y: 0,
+      angle: 0,
       w,
       h: cardHeight(text, w),
       depth: graph.depth.get(node.node_key) ?? 0,
@@ -236,7 +253,14 @@ export function layoutMindmap(mindmap: Mindmap, options: LayoutOptions): Layout 
 
   const byKey = new Map(abstract.map(a => [a.key, a]))
   if (options.mode === 'manual') placeManual(abstract, mindmap.nodes)
-  else placeRadial(abstract, byKey, graph, options.spread)
+  else placeRadial(abstract, byKey, graph, options.spread, options.nodeGap)
+
+  if (options.preventOverlap) {
+    // Radial placement already guarantees clearance, so this is a backstop there. In manual mode it is
+    // doing real work: hand-dragged cards overlap constantly, and the hub is pinned so the arrangement
+    // spreads outward from it rather than drifting as a whole.
+    separateAbstractNodes(abstract, options.nodeGap, graph.hub)
+  }
 
   return fitToCanvas(abstract, byKey, mindmap.edges, accents, branches, options, order)
 }
@@ -331,6 +355,29 @@ function placeManual(nodes: AbstractNode[], source: MindmapNode[]): void {
 }
 
 /**
+ * Runs the overlap separation over abstract nodes.
+ *
+ * Bridges between this module's centre-based coordinates and `arrange.ts`, which works in top-left boxes
+ * so it can be shared with the editor's alignment tools.
+ */
+function separateAbstractNodes(nodes: AbstractNode[], gap: number, hub: string): void {
+  const placements = separateBoxes(
+    nodes.map(n => ({ key: n.key, x: n.x - n.w / 2, y: n.y - n.h / 2, width: n.w, height: n.h })),
+    gap,
+    new Set([hub]),
+  )
+  if (placements.size === 0) return
+
+  for (const node of nodes) {
+    const next = placements.get(node.key)
+    if (next) {
+      node.x = next.x + node.w / 2
+      node.y = next.y + node.h / 2
+    }
+  }
+}
+
+/**
  * Radial tree placement.
  *
  * Each node owns an angular wedge; its children divide that wedge in proportion to how many
@@ -348,24 +395,35 @@ function placeRadial(
   byKey: Map<string, AbstractNode>,
   graph: GraphView,
   spread: number,
+  nodeGap: number,
 ): void {
   const leaves = leafCounts(graph)
-  const radii = ringRadii(nodes, spread)
 
-  // Components are laid out concentrically around a shared centre; the hub's component
-  // dominates and any stragglers land on the same rings. Disconnected mindmaps are a corner
-  // case, not a use case, so this only has to be sane, not pretty.
+  // Angles first, radii second. The order matters: how much room a card needs alongside its neighbour
+  // depends on which way round the circle it sits, so the radius cannot be computed until the angles
+  // are known. Getting this backwards is what caused cards to overlap on the left and right flanks.
   for (const root of graph.roots) {
     const rootNode = byKey.get(root)
     if (!rootNode) continue
     rootNode.x = 0
     rootNode.y = 0
+    rootNode.angle = 0
 
     // Start at -90° so the first branch sits at the top, reading top-down like the reference.
-    assignWedge(root, -Math.PI / 2, Math.PI * 2, byKey, graph, leaves, radii)
+    assignWedge(root, -Math.PI / 2, Math.PI * 2, byKey, graph, leaves)
+  }
+
+  const radii = ringRadii(nodes, spread, nodeGap)
+
+  for (const node of nodes) {
+    if (node.depth === 0) continue
+    const radius = radii[Math.min(node.depth, radii.length - 1)]
+    node.x = Math.cos(node.angle) * radius
+    node.y = Math.sin(node.angle) * radius
   }
 }
 
+/** Assigns an angle to every node. Radius is applied later, once extents are known. */
 function assignWedge(
   key: string,
   centreAngle: number,
@@ -373,7 +431,6 @@ function assignWedge(
   byKey: Map<string, AbstractNode>,
   graph: GraphView,
   leaves: Map<string, number>,
-  radii: number[],
 ): void {
   const children = graph.children.get(key) ?? []
   if (children.length === 0) return
@@ -392,35 +449,94 @@ function assignWedge(
     cursor += slot
 
     const childNode = byKey.get(child)
-    if (childNode) {
-      const depth = graph.depth.get(child) ?? 1
-      const radius = radii[Math.min(depth, radii.length - 1)]
-      childNode.x = Math.cos(angle) * radius
-      childNode.y = Math.sin(angle) * radius
-    }
+    if (childNode) childNode.angle = angle
 
     // Children fan out within their parent's slot, narrowed so cousins cannot interleave.
-    assignWedge(child, angle, slot * 0.86, byKey, graph, leaves, radii)
+    assignWedge(child, angle, slot * 0.86, byKey, graph, leaves)
   }
 }
 
-function ringRadii(nodes: AbstractNode[], spread: number): number[] {
-  const perDepth = new Map<number, number>()
+/**
+ * Half-extent of an axis-aligned card measured along the ring (perpendicular to the radius).
+ *
+ * This is the number the old formula was missing. Cards are never rotated to follow the circle, so how
+ * much of the ring one occupies depends on where it sits: at the top or bottom, neighbours sit
+ * side by side and the card's WIDTH is what has to clear; on the left and right flanks the ring runs
+ * vertically, neighbours stack, and its HEIGHT is what has to clear.
+ *
+ * Using width alone — as before — under-reserves space by roughly the difference between width and
+ * height wherever the ring is steep, which is exactly where the overlapping happened.
+ */
+function tangentialHalfExtent(node: AbstractNode): number {
+  const sin = Math.abs(Math.sin(node.angle))
+  const cos = Math.abs(Math.cos(node.angle))
+  return (node.w / 2) * sin + (node.h / 2) * cos
+}
+
+/** Half-extent along the radius, used to keep consecutive rings clear of one another. */
+function radialHalfExtent(node: AbstractNode): number {
+  const sin = Math.abs(Math.sin(node.angle))
+  const cos = Math.abs(Math.cos(node.angle))
+  return (node.w / 2) * cos + (node.h / 2) * sin
+}
+
+/**
+ * Radius per ring, derived so that no two neighbours on it can touch.
+ *
+ * For adjacent nodes separated by Δθ, the straight-line distance between their centres is
+ * `2·r·sin(Δθ/2)`. Requiring that to be at least the sum of their facing half-extents plus the gap and
+ * solving for `r` gives the smallest radius that guarantees clearance. Taking the maximum across
+ * adjacent pairs sizes the ring for its tightest pinch rather than its average.
+ */
+function ringRadii(nodes: AbstractNode[], spread: number, nodeGap: number): number[] {
+  const byDepth = new Map<number, AbstractNode[]>()
   let maxDepth = 0
   for (const n of nodes) {
-    perDepth.set(n.depth, (perDepth.get(n.depth) ?? 0) + 1)
+    const list = byDepth.get(n.depth)
+    if (list) list.push(n)
+    else byDepth.set(n.depth, [n])
     maxDepth = Math.max(maxDepth, n.depth)
   }
 
   const radii = [0]
+
   for (let depth = 1; depth <= maxDepth; depth++) {
-    const count = perDepth.get(depth) ?? 1
-    // Arc length each card needs, with breathing room between neighbours.
-    const needed = (count * CARD_W * 1.18) / (Math.PI * 2)
-    // Radial clearance from the previous ring: card height plus a gap.
-    const stepped = radii[depth - 1] + CARD_W * 0.62
-    radii.push(Math.max(needed, stepped, CARD_W * 1.35) * spread)
+    const ring = (byDepth.get(depth) ?? []).slice().sort((a, b) => a.angle - b.angle)
+    const inner = byDepth.get(depth - 1) ?? []
+
+    let required = CARD_W * 1.35
+
+    // ── Tangential: clearance between neighbours on this ring ──
+    for (let i = 0; i < ring.length; i++) {
+      const current = ring[i]
+      // Wrap to the first node, closing the circle. Without this the pair spanning the -90° seam is
+      // never checked, and that is where the first and last branch meet.
+      const next = ring[(i + 1) % ring.length]
+      if (ring.length < 2) break
+
+      let delta = next.angle - current.angle
+      if (i === ring.length - 1) delta += Math.PI * 2
+      // Antipodal or beyond needs no help; sin would also start shrinking again past π.
+      if (delta >= Math.PI) continue
+
+      const halfChord = Math.sin(delta / 2)
+      if (halfChord <= 1e-6) continue
+
+      const needed = (tangentialHalfExtent(current) + tangentialHalfExtent(next) + nodeGap) / (2 * halfChord)
+      required = Math.max(required, needed)
+    }
+
+    // ── Radial: clearance from the ring inside this one ──
+    const innerReach = inner.length > 0 ? Math.max(...inner.map(radialHalfExtent)) : 0
+    const outerReach = ring.length > 0 ? Math.max(...ring.map(radialHalfExtent)) : 0
+    required = Math.max(required, radii[depth - 1] + innerReach + outerReach + nodeGap)
+
+    radii.push(required)
   }
+
+  // Spread is applied at the end so it scales the whole arrangement uniformly. Folding it in per ring
+  // compounded, because each radius is built from the previous one.
+  return radii.map(r => r * spread)
   return radii
 }
 

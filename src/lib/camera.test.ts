@@ -39,6 +39,8 @@ const options = (): LayoutOptions => ({
   height: 1200,
   mode: 'radial',
   spread: 1,
+  nodeGap: 18,
+  preventOverlap: true,
   uniformCardHeight: false,
   curvature: 0.14,
   padding: 66,

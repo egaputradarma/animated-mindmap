@@ -165,5 +165,76 @@ export function gridBoxes(boxes: Box[], columns: number, gapX = 40, gapY = 40): 
   return result
 }
 
+/**
+ * Pushes overlapping boxes apart until every pair clears `gap`.
+ *
+ * Iterative pairwise relaxation rather than a single analytical pass. Separating one pair can push a box
+ * into a third, so the whole set has to be revisited; a handful of passes settles any realistic mindmap,
+ * and the iteration cap stops a pathological arrangement from spinning.
+ *
+ * Each overlapping pair is separated along its axis of *least* penetration, which moves cards the
+ * shortest distance and so preserves the arrangement the user made. Pushing along the centre-to-centre
+ * line instead would look more physical but drags cards diagonally out of rows they were aligned into.
+ *
+ * `pinned` keys are held still. Anchoring the hub keeps the graph spreading outward from its centre
+ * rather than the whole cluster drifting.
+ */
+export function separateBoxes(
+  boxes: Box[],
+  gap: number,
+  pinned: ReadonlySet<string> = new Set(),
+  iterations = 24,
+): Map<string, Placement> {
+  if (boxes.length < 2) return new Map()
+
+  // Worked on a copy so the caller's boxes are untouched.
+  const working = boxes.map(b => ({ ...b }))
+  let moved = false
+
+  for (let pass = 0; pass < iterations; pass++) {
+    let collided = false
+
+    for (let i = 0; i < working.length; i++) {
+      for (let j = i + 1; j < working.length; j++) {
+        const a = working[i]
+        const b = working[j]
+
+        // Penetration depth on each axis, treating `gap` as part of each box's footprint.
+        const overlapX = (a.width + b.width) / 2 + gap - Math.abs(centreOf(a).x - centreOf(b).x)
+        const overlapY = (a.height + b.height) / 2 + gap - Math.abs(centreOf(a).y - centreOf(b).y)
+        if (overlapX <= 0 || overlapY <= 0) continue
+
+        collided = true
+        moved = true
+
+        const aPinned = pinned.has(a.key)
+        const bPinned = pinned.has(b.key)
+        if (aPinned && bPinned) continue
+
+        // Split the correction between the two, unless one is pinned and cannot move.
+        const shareA = aPinned ? 0 : bPinned ? 1 : 0.5
+        const shareB = 1 - shareA
+
+        if (overlapX < overlapY) {
+          const direction = centreOf(a).x <= centreOf(b).x ? -1 : 1
+          a.x += direction * overlapX * shareA
+          b.x -= direction * overlapX * shareB
+        } else {
+          const direction = centreOf(a).y <= centreOf(b).y ? -1 : 1
+          a.y += direction * overlapY * shareA
+          b.y -= direction * overlapY * shareB
+        }
+      }
+    }
+
+    if (!collided) break
+  }
+
+  if (!moved) return new Map()
+  return new Map(working.map(b => [b.key, { x: round(b.x), y: round(b.y) }]))
+}
+
+const centreOf = (b: Box) => ({ x: b.x + b.width / 2, y: b.y + b.height / 2 })
+
 /** Whole pixels: fractional node positions serve no purpose and make saved JSON noisy. */
 const round = (v: number): number => Math.round(v)
