@@ -532,6 +532,15 @@ export default function AnimatePage() {
                   />
                 </Field>
               )}
+              <Toggle
+                checked={spec.uniformCardHeight}
+                onChange={v => update('uniformCardHeight', v)}
+                label="Equal card heights"
+              />
+              <p className="text-[11px] leading-snug text-slate-500">
+                Card height normally follows the text, which looks ragged in a hand-arranged grid. This sizes
+                every card to the tallest, so aligned edges stay aligned.
+              </p>
               <Field label="Wire curve">
                 <Slider
                   value={spec.curvature}

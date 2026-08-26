@@ -108,6 +108,15 @@ export interface LayoutOptions {
   mode: LayoutMode
   /** Multiplies ring radii. Below 1 tightens the graph (bigger cards), above 1 loosens it. */
   spread: number
+  /**
+   * Give every card the same height, taken from the tallest.
+   *
+   * Card height normally follows text length, so a one-word node sits noticeably shorter than one with
+   * a detail line. That is fine radially, where cards rarely sit edge to edge, but it makes a
+   * hand-arranged grid look ragged — and it means aligning edges in the editor cannot align them in the
+   * export, because the export re-derives each height. Equalising removes both problems.
+   */
+  uniformCardHeight: boolean
   /** Perpendicular bow of the connectors as a fraction of their span. 0 draws straight lines. */
   curvature: number
   /** Inset from every canvas edge, in px. */
@@ -219,6 +228,12 @@ export function layoutMindmap(mindmap: Mindmap, options: LayoutOptions): Layout 
     } satisfies AbstractNode
   })
 
+  if (options.uniformCardHeight && abstract.length > 0) {
+    // Tallest wins, so no card ever has to shrink its text to fit.
+    const tallest = Math.max(...abstract.map(a => a.h))
+    for (const node of abstract) node.h = tallest
+  }
+
   const byKey = new Map(abstract.map(a => [a.key, a]))
   if (options.mode === 'manual') placeManual(abstract, mindmap.nodes)
   else placeRadial(abstract, byKey, graph, options.spread)
@@ -295,13 +310,23 @@ function cardHeight(text: CardText, cardWidth: number): number {
   return h
 }
 
-/** Uses the editor's own coordinates, recentred on the origin. */
+/**
+ * Uses the editor's own coordinates.
+ *
+ * `position_x/position_y` are the card's TOP-LEFT corner, matching what React Flow stores, while this
+ * layout works in centres — hence the half-size offset.
+ *
+ * Getting this wrong is subtle and was: treating the stored position as a centre shifts every node by
+ * half its own size relative to the editor, and because card heights depend on text length, each node
+ * shifts by a different amount. Arrangement done in the editor then did not survive into the export,
+ * which makes any alignment tool meaningless.
+ */
 function placeManual(nodes: AbstractNode[], source: MindmapNode[]): void {
   const positions = new Map(source.map(n => [n.node_key, { x: n.position_x, y: n.position_y }]))
   for (const n of nodes) {
     const p = positions.get(n.key)
-    n.x = p?.x ?? 0
-    n.y = p?.y ?? 0
+    n.x = (p?.x ?? 0) + n.w / 2
+    n.y = (p?.y ?? 0) + n.h / 2
   }
 }
 

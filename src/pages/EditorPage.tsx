@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import ReactFlow, {
   addEdge,
@@ -20,7 +20,24 @@ import ReactFlow, {
   type NodeProps,
 } from 'reactflow'
 import 'reactflow/dist/style.css'
-import { ArrowLeft, ArrowLeftRight, Check, Clipboard, Plus, Sparkles, Trash2 } from 'lucide-react'
+import {
+  AlignCenterHorizontal,
+  AlignCenterVertical,
+  AlignEndHorizontal,
+  AlignEndVertical,
+  AlignHorizontalSpaceAround,
+  AlignStartHorizontal,
+  AlignStartVertical,
+  AlignVerticalSpaceAround,
+  ArrowLeft,
+  ArrowLeftRight,
+  Check,
+  Clipboard,
+  LayoutGrid,
+  Plus,
+  Sparkles,
+  Trash2,
+} from 'lucide-react'
 import AppLogo from '../components/AppLogo'
 import {
   Banner,
@@ -32,6 +49,14 @@ import {
   TextInput,
   Toggle,
 } from '../components/ui'
+import {
+  alignBoxes,
+  distributeBoxes,
+  gridBoxes,
+  type AlignMode,
+  type Box,
+  type DistributeAxis,
+} from '../lib/arrange'
 import { exportAuthoringJson } from '../lib/importMindmap'
 import { accentColour, rgba } from '../lib/palette'
 import { getMindmap, saveMindmap } from '../lib/storage'
@@ -75,16 +100,28 @@ const HANDLE_SIDES = [
   { id: 'l', position: Position.Left },
 ] as const
 
+/**
+ * Editor card width, fixed rather than content-sized.
+ *
+ * The animation draws every card at one width, so letting these grow with their text would mean edges
+ * that line up here do not line up there — which would make the alignment tools lie.
+ */
+const CARD_WIDTH = 168
+
 function CardNode({ data, selected }: NodeProps<CardData>) {
   const { node } = data
   const colour = accentColour('dark', node.accent ?? 'slate')
 
   return (
     <div
-      className={`min-w-[150px] max-w-[220px] rounded-lg border bg-ink-850 px-3 py-2 shadow-lg transition-colors ${
+      className={`rounded-lg border bg-ink-850 px-3 py-2 shadow-lg transition-colors ${
         selected ? 'border-blue-400' : 'border-ink-600'
       }`}
-      style={{ borderLeft: `3px solid ${rgba(colour)}`, borderStyle: node.reserved ? 'dashed' : undefined }}
+      style={{
+        width: CARD_WIDTH,
+        borderLeft: `3px solid ${rgba(colour)}`,
+        borderStyle: node.reserved ? 'dashed' : undefined,
+      }}
     >
       {HANDLE_SIDES.map(side => (
         <Handle
@@ -107,6 +144,32 @@ function CardNode({ data, selected }: NodeProps<CardData>) {
 }
 
 const NODE_TYPES = { card: CardNode }
+
+/** Square icon button for the alignment toolbar. Label carries the meaning for screen readers. */
+function IconAction({
+  label,
+  onClick,
+  disabled,
+  children,
+}: {
+  label: string
+  onClick: () => void
+  disabled?: boolean
+  children: ReactNode
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={disabled}
+      title={label}
+      aria-label={label}
+      className="flex h-7 w-7 items-center justify-center rounded-md text-slate-400 transition-colors hover:bg-ink-800 hover:text-slate-100 disabled:cursor-not-allowed disabled:opacity-35 disabled:hover:bg-transparent focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-400"
+    >
+      {children}
+    </button>
+  )
+}
 
 /** Presentation rides along on the React Flow edge so `style` stays a derived value. */
 interface EdgeData {
@@ -359,6 +422,43 @@ function EditorInner() {
     )
   }
 
+  /**
+   * Boxes for the currently multi-selected nodes.
+   *
+   * Measured dimensions come from React Flow once a node has rendered; before that they are null, so
+   * the fixed card width and a rough height stand in. Falling back matters because an alignment run
+   * immediately after adding a node would otherwise treat it as zero-sized.
+   */
+  const selectedBoxes = useMemo<Box[]>(
+    () =>
+      nodes
+        .filter(n => n.selected)
+        .map(n => ({
+          key: n.id,
+          x: n.position.x,
+          y: n.position.y,
+          width: n.width ?? CARD_WIDTH,
+          height: n.height ?? 64,
+        })),
+    [nodes],
+  )
+
+  /** Writes a set of computed positions back onto the nodes. */
+  const applyPlacements = (placements: Map<string, { x: number; y: number }>) => {
+    if (placements.size === 0) return
+    setNodes(current =>
+      current.map(n => {
+        const next = placements.get(n.id)
+        return next ? { ...n, position: next } : n
+      }),
+    )
+  }
+
+  const runAlign = (mode: AlignMode) => applyPlacements(alignBoxes(selectedBoxes, mode))
+  const runDistribute = (axis: DistributeAxis) => applyPlacements(distributeBoxes(selectedBoxes, axis))
+  const runGrid = () =>
+    applyPlacements(gridBoxes(selectedBoxes, Math.max(2, Math.round(Math.sqrt(selectedBoxes.length)))))
+
   const deleteSelectedEdge = () => {
     if (!selectedEdgeId) return
     setEdges(current => current.filter(e => e.id !== selectedEdgeId))
@@ -541,6 +641,11 @@ function EditorInner() {
           connectionMode={ConnectionMode.Loose}
           fitView
           proOptions={{ hideAttribution: true }}
+          // Shift-drag draws a selection box; the alignment tools need more than one node to act on.
+          selectionOnDrag
+          panOnDrag={[1, 2]}
+          selectionKeyCode="Shift"
+          multiSelectionKeyCode={['Control', 'Meta']}
         >
           <Background color="#1e293b" gap={22} />
           <Controls showInteractive={false} />
@@ -687,10 +792,63 @@ function EditorInner() {
           </aside>
         )}
 
-        {!selectedNode && !selectedEdge && (
+        {/* Alignment toolbar. Only useful with a multi-selection, so it appears with one. */}
+        {selectedBoxes.length >= 2 && (
+          <div className="absolute left-1/2 top-3 z-10 -translate-x-1/2 rounded-xl border border-ink-700 bg-ink-900/95 p-2 shadow-2xl backdrop-blur">
+            <div className="flex items-center gap-1">
+              <span className="px-1.5 text-[11px] font-medium text-slate-500">{selectedBoxes.length} selected</span>
+
+              <span className="mx-1 h-5 w-px bg-ink-700" />
+              <IconAction label="Align left" onClick={() => runAlign('left')}>
+                <AlignStartVertical size={15} />
+              </IconAction>
+              <IconAction label="Align horizontal centres" onClick={() => runAlign('center-x')}>
+                <AlignCenterVertical size={15} />
+              </IconAction>
+              <IconAction label="Align right" onClick={() => runAlign('right')}>
+                <AlignEndVertical size={15} />
+              </IconAction>
+
+              <span className="mx-1 h-5 w-px bg-ink-700" />
+              <IconAction label="Align top" onClick={() => runAlign('top')}>
+                <AlignStartHorizontal size={15} />
+              </IconAction>
+              <IconAction label="Align vertical middles" onClick={() => runAlign('middle')}>
+                <AlignCenterHorizontal size={15} />
+              </IconAction>
+              <IconAction label="Align bottom" onClick={() => runAlign('bottom')}>
+                <AlignEndHorizontal size={15} />
+              </IconAction>
+
+              <span className="mx-1 h-5 w-px bg-ink-700" />
+              <IconAction
+                label="Distribute horizontally (equal gaps)"
+                disabled={selectedBoxes.length < 3}
+                onClick={() => runDistribute('horizontal')}
+              >
+                <AlignHorizontalSpaceAround size={15} />
+              </IconAction>
+              <IconAction
+                label="Distribute vertically (equal gaps)"
+                disabled={selectedBoxes.length < 3}
+                onClick={() => runDistribute('vertical')}
+              >
+                <AlignVerticalSpaceAround size={15} />
+              </IconAction>
+              <IconAction label="Arrange in a grid" onClick={runGrid}>
+                <LayoutGrid size={15} />
+              </IconAction>
+            </div>
+            <p className="mt-1.5 px-1.5 text-[10px] leading-snug text-slate-600">
+              Applies in &ldquo;As arranged&rdquo; mode. Distribute needs three or more.
+            </p>
+          </div>
+        )}
+
+        {!selectedNode && !selectedEdge && selectedBoxes.length < 2 && (
           <div className="pointer-events-none absolute bottom-3 left-1/2 z-10 -translate-x-1/2">
             <Banner tone="info">
-              Click a node or a connection to edit it · drag from any edge of a card to connect ·
+              Click a node or a connection to edit it · shift-drag to select several and align them ·
               positions only matter in &ldquo;As arranged&rdquo; mode
             </Banner>
           </div>

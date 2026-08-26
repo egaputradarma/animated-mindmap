@@ -39,6 +39,7 @@ const options = (): LayoutOptions => ({
   height: 1200,
   mode: 'radial',
   spread: 1,
+  uniformCardHeight: false,
   curvature: 0.14,
   padding: 66,
   titleSpace: 156,

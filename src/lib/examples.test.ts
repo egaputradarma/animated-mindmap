@@ -28,6 +28,7 @@ const squarePreset = (): LayoutOptions => ({
   height: 1200,
   mode: 'radial',
   spread: 1,
+  uniformCardHeight: false,
   curvature: 0.14,
   padding: 1200 * 0.055,
   titleSpace: 1200 * 0.13,

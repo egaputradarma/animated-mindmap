@@ -53,6 +53,7 @@ const layoutOptions = (over: Partial<LayoutOptions> = {}): LayoutOptions => ({
   height: 1200,
   mode: 'radial',
   spread: 1,
+  uniformCardHeight: false,
   curvature: 0.14,
   padding: 66,
   titleSpace: 120,
@@ -254,6 +255,57 @@ describe('layout', () => {
     const left = layout.nodes.find(n => n.key === 'c')!
     expect(right.x).toBeGreaterThan(hub.x)
     expect(left.x).toBeLessThan(hub.x)
+  })
+
+  it('treats manual positions as top-left, so editor alignment survives into the export', () => {
+    // Two nodes sharing a position_y must come out with aligned TOPS. They previously came out with
+    // aligned centres, because the stored position was read as a centre — and since card heights differ
+    // with text length, aligning tops in the editor produced misaligned tops in the animation.
+    const map: Mindmap = {
+      id: 'm',
+      name: 'Aligned',
+      description: null,
+      nodes: [
+        { node_key: 'short', label: 'Short', position_x: 0, position_y: 100, hero: true },
+        { node_key: 'tall', label: 'Tall one', detail: 'Two lines of detail text here', position_x: 400, position_y: 100 },
+      ],
+      edges: [{ id: 'e', source_node_key: 'short', target_node_key: 'tall' }],
+      updated_at: new Date().toISOString(),
+    }
+
+    const layout = layoutMindmap(map, layoutOptions({ mode: 'manual' }))
+    const short = layout.nodes.find(n => n.key === 'short')!
+    const tall = layout.nodes.find(n => n.key === 'tall')!
+
+    expect(tall.h).toBeGreaterThan(short.h)
+    expect(short.y - short.h / 2).toBeCloseTo(tall.y - tall.h / 2, 3)
+  })
+
+  it('equalises card heights when asked, so aligned edges stay aligned', () => {
+    const map = fixture()
+
+    const ragged = layoutMindmap(map, layoutOptions())
+    const uniform = layoutMindmap(map, layoutOptions({ uniformCardHeight: true }))
+
+    // The fixture has nodes with and without detail lines, so heights differ by default.
+    expect(new Set(ragged.nodes.map(n => Math.round(n.h))).size).toBeGreaterThan(1)
+    expect(new Set(uniform.nodes.map(n => Math.round(n.h))).size).toBe(1)
+  })
+
+  it('sizes uniform cards to the tallest, never shrinking one', () => {
+    const map = fixture()
+    const ragged = layoutMindmap(map, layoutOptions())
+    const uniform = layoutMindmap(map, layoutOptions({ uniformCardHeight: true }))
+
+    // Compared in abstract units, not canvas pixels. Equalising heights enlarges the content bounding
+    // box, so fitToCanvas picks a smaller scale and every card ends up fewer pixels tall — which makes
+    // a direct pixel comparison between two layouts meaningless. Dividing by each layout's own scale
+    // recovers the pre-fit height, where "never shrink a card" is actually a statement about sizing.
+    const tallestBefore = Math.max(...ragged.nodes.map(n => n.h / ragged.scale))
+
+    for (const node of uniform.nodes) {
+      expect(node.h / uniform.scale).toBeCloseTo(tallestBefore, 3)
+    }
   })
 })
 

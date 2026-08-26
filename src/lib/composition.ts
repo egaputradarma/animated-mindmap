@@ -54,6 +54,8 @@ export interface CompositionSpec {
   /** Ring spacing multiplier. Lower packs the graph tighter and so enlarges the cards. */
   spread: number
   curvature: number
+  /** Equalise card heights. Mostly for hand-arranged grids, where ragged heights show. */
+  uniformCardHeight: boolean
   loopMode: LoopMode
   /** Packet traversals per loop. Rounded to an integer — see timeline.ts on why. */
   packetCycles: number
@@ -72,6 +74,9 @@ export const DEFAULT_SPEC: Omit<CompositionSpec, 'mindmap' | 'signature'> = {
   layoutMode: 'radial',
   spread: 1,
   curvature: 0.14,
+  // Off by default: radial layouts look better with cards sized to their content, and this exists for
+  // the hand-arranged case where ragged heights are obvious.
+  uniformCardHeight: false,
   loopMode: 'build',
   packetCycles: 3,
   // Fixed by default: the camera is the answer to a dense mindmap, not something to impose on a
@@ -110,6 +115,7 @@ export function buildComposition(spec: CompositionSpec, signature: SignatureAsse
     mode: spec.layoutMode,
     spread: spec.spread,
     curvature: spec.curvature,
+    uniformCardHeight: spec.uniformCardHeight,
     padding: Math.min(preset.width, preset.height) * 0.055,
     titleSpace,
     footerSpace,
